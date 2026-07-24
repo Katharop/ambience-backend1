@@ -296,6 +296,19 @@ app.get("/api/products", async (req, res) => {
   }
 });
 
+app.get("/api/products/:id", async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) {
+      return res.status(404).json({ success: false, error: "Product not found" });
+    }
+    return res.status(200).json({ success: true, product });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error fetching single product:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to fetch product" });
+  }
+});
+
 app.post("/api/products", async (req, res) => {
   try {
     const product = new Product(req.body);
