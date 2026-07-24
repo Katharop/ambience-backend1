@@ -85,12 +85,25 @@ const productSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["live", "draft", "archived"],
+      enum: ["live", "draft", "archived", "pending"],
       default: "live",
     },
     addedBy: {
       type: String,
       default: "admin@ambience.com",
+    },
+    submittedBy: {
+      type: String,
+      default: null,
+    },
+    source: {
+      type: String,
+      enum: ["admin", "creator_hub", null],
+      default: null,
+    },
+    isOfficial: {
+      type: Boolean,
+      default: true,
     },
     spec: {
       type: String,

@@ -48,6 +48,7 @@ const nodemailer = require("nodemailer");
 // ── Auth system imports ─────────────────────────────────────────────────────
 const authController = require("./controllers/auth");
 const { protect }    = require("./middleware/auth");
+const { restrictTo } = require("./middleware/authMiddleware");
 
 const Product = require("./models/Product");
 const FlagshipDeal = require("./models/FlagshipDeal");
@@ -327,6 +328,139 @@ app.delete("/api/products/:id", async (req, res) => {
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error deleting product:", error.message);
     return res.status(500).json({ success: false, error: "Failed to delete product" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STEP 4.6: Creator Hub — User Product Submission Pipeline
+//
+// Flow: User submits via Creator Hub → saved as pending → Admin moderates
+//   POST   /api/products/create       → User submits product (status: pending)
+//   GET    /api/products/pending       → Admin fetches pending submissions
+//   PUT    /api/products/:id/approve   → Admin approves → status: live
+//   DELETE /api/products/:id/reject    → Admin rejects → deleted from DB
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── User Submission: Create pending product ─────────────────────────────────
+app.post("/api/products/create", protect, async (req, res) => {
+  try {
+    const {
+      name, price, category, description, imageUrl,
+      isOfficial, submittedBy, source, hasARSupport, modelUrl,
+    } = req.body;
+
+    // ── Validation ──
+    if (!name || !name.trim()) {
+      return res.status(400).json({ success: false, error: "Product name is required." });
+    }
+    if (!price || parseFloat(price) <= 0) {
+      return res.status(400).json({ success: false, error: "Valid price is required." });
+    }
+    if (!category) {
+      return res.status(400).json({ success: false, error: "Category is required." });
+    }
+
+    const priceVal = parseFloat(price);
+
+    const product = new Product({
+      name: name.trim(),
+      brand: "Community Creator",
+      category,
+      retailPrice: priceVal,
+      dealPrice: priceVal,
+      description: description ? description.trim() : "",
+      imageUrl: imageUrl || "",
+      modelUrl: modelUrl || "",
+      has3DModel: hasARSupport === "true" || hasARSupport === true,
+      targetSection: priceVal >= 100000 ? "deals_luxury" : "shop_general",
+      status: "pending",
+      isOfficial: false,
+      submittedBy: submittedBy || req.user?.userId || req.user?._id?.toString() || "unknown",
+      source: source || "creator_hub",
+      addedBy: req.user?.email || "creator",
+      tag: "CREATOR",
+      glyph: "🎨",
+      accent: "#a78bfa",
+    });
+
+    await product.save();
+
+    console.log(`[AMBIENCE] 📦 New product submission: "${product.name}" by ${product.submittedBy}`);
+
+    return res.status(201).json({
+      success: true,
+      product,
+      message: "Product submitted for review!",
+    });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error submitting product:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to submit product" });
+  }
+});
+
+// ── Admin: Fetch all pending submissions ────────────────────────────────────
+app.get("/api/products/pending", protect, restrictTo("admin"), async (req, res) => {
+  try {
+    const products = await Product.find({ status: "pending" }).sort({ createdAt: -1 });
+    return res.status(200).json({ success: true, products });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error fetching pending products:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to fetch pending products" });
+  }
+});
+
+// ── Admin: Approve a pending submission ─────────────────────────────────────
+app.put("/api/products/:id/approve", protect, restrictTo("admin"), async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) {
+      return res.status(404).json({ success: false, error: "Product not found" });
+    }
+    if (product.status !== "pending") {
+      return res.status(400).json({ success: false, error: "Product is not in pending status" });
+    }
+
+    product.status = "live";
+    product.addedBy = "moderator";
+    // Auto-assign target section based on price
+    const priceVal = product.dealPrice || product.retailPrice || 0;
+    product.targetSection = priceVal >= 100000 ? "deals_luxury" : "shop_general";
+
+    await product.save();
+
+    console.log(`[AMBIENCE] ✅ Product approved: "${product.name}"`);
+
+    return res.status(200).json({
+      success: true,
+      product,
+      message: "Product approved and now live!",
+    });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error approving product:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to approve product" });
+  }
+});
+
+// ── Admin: Reject and delete a pending submission ───────────────────────────
+app.delete("/api/products/:id/reject", protect, restrictTo("admin"), async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) {
+      return res.status(404).json({ success: false, error: "Product not found" });
+    }
+
+    const productName = product.name;
+    await Product.findByIdAndDelete(req.params.id);
+
+    console.log(`[AMBIENCE] ❌ Product rejected: "${productName}"`);
+
+    return res.status(200).json({
+      success: true,
+      message: `Product "${productName}" rejected and removed.`,
+    });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error rejecting product:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to reject product" });
   }
 });
 
