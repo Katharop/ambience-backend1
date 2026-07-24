@@ -49,6 +49,9 @@ const nodemailer = require("nodemailer");
 const authController = require("./controllers/auth");
 const { protect }    = require("./middleware/auth");
 
+const Product = require("./models/Product");
+const FlagshipDeal = require("./models/FlagshipDeal");
+
 // ── Email templates ─────────────────────────────────────────────────────────
 const { generatePhotoFeedbackEmail } = require("./photo-feedback-template");
 
@@ -278,6 +281,61 @@ app.post("/api/auth/reset-password",  authLimiter, authController.resetPassword)
 
 // Profile Management (protected)
 app.put("/api/auth/update-profile",   protect, authController.updateProfile);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STEP 4.5: Product Management Routes
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get("/api/products", async (req, res) => {
+  try {
+    const products = await Product.find({ status: "live" }).sort({ createdAt: -1 });
+    return res.status(200).json({ success: true, products });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error fetching products:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to fetch products" });
+  }
+});
+
+app.post("/api/products", protect, async (req, res) => {
+  try {
+    const product = new Product(req.body);
+    await product.save();
+    return res.status(201).json({ success: true, product, message: "Product deployed successfully." });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error creating product:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to create product" });
+  }
+});
+
+app.delete("/api/products/:id", protect, async (req, res) => {
+  try {
+    await Product.findByIdAndDelete(req.params.id);
+    return res.status(200).json({ success: true, message: "Product removed." });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error deleting product:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to delete product" });
+  }
+});
+
+app.get("/api/flagship", async (req, res) => {
+  try {
+    const deal = await FlagshipDeal.findOne();
+    return res.status(200).json({ success: true, deal });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error fetching flagship deal:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to fetch flagship deal" });
+  }
+});
+
+app.put("/api/flagship", protect, async (req, res) => {
+  try {
+    const deal = await FlagshipDeal.findOneAndUpdate({}, req.body, { upsert: true, new: true });
+    return res.status(200).json({ success: true, deal, message: "Flagship deal saved." });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error upserting flagship deal:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to save flagship deal" });
+  }
+});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 5: Photo Processing Endpoint (kept inline — not auth-related)
