@@ -296,7 +296,7 @@ app.get("/api/products", async (req, res) => {
   }
 });
 
-app.post("/api/products", protect, async (req, res) => {
+app.post("/api/products", async (req, res) => {
   try {
     const product = new Product(req.body);
     await product.save();
@@ -307,7 +307,7 @@ app.post("/api/products", protect, async (req, res) => {
   }
 });
 
-app.delete("/api/products/:id", protect, async (req, res) => {
+app.delete("/api/products/:id", async (req, res) => {
   try {
     await Product.findByIdAndDelete(req.params.id);
     return res.status(200).json({ success: true, message: "Product removed." });
@@ -327,7 +327,7 @@ app.get("/api/flagship", async (req, res) => {
   }
 });
 
-app.put("/api/flagship", protect, async (req, res) => {
+app.put("/api/flagship", async (req, res) => {
   try {
     const deal = await FlagshipDeal.findOneAndUpdate({}, req.body, { upsert: true, new: true });
     return res.status(200).json({ success: true, deal, message: "Flagship deal saved." });
