@@ -1,0 +1,282 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// userStore.js
+//
+// AMBIENCE — Self-Contained User Database (JSON File Store)
+//
+// Flat-file user database stored in server/data/users.json.
+// Supports: create, find, verify email, update password, list users.
+//
+// All passwords are stored as bcrypt hashes (never plain text).
+// Email addresses are always normalized to lowercase + trimmed.
+//
+// Thread-safe writes via atomic temp-file pattern.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const fs   = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+
+// ── File paths ──────────────────────────────────────────────────────────────
+const DATA_DIR  = path.join(__dirname, "data");
+const USERS_FILE = path.join(DATA_DIR, "users.json");
+
+// ── Ensure data directory and file exist ────────────────────────────────────
+const ensureDataFile = () => {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    console.log("[UserStore] Created data directory:", DATA_DIR);
+  }
+  if (!fs.existsSync(USERS_FILE)) {
+    fs.writeFileSync(USERS_FILE, JSON.stringify([], null, 2), "utf-8");
+    console.log("[UserStore] Created users database:", USERS_FILE);
+  }
+};
+
+// Initialize on module load
+ensureDataFile();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal: Read all users from disk
+// ─────────────────────────────────────────────────────────────────────────────
+const readUsers = () => {
+  try {
+    const raw = fs.readFileSync(USERS_FILE, "utf-8");
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error("[UserStore] Error reading users file:", err.message);
+    return [];
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal: Write all users to disk (atomic write via temp file)
+// ─────────────────────────────────────────────────────────────────────────────
+const writeUsers = (users) => {
+  const tempFile = USERS_FILE + ".tmp";
+  try {
+    fs.writeFileSync(tempFile, JSON.stringify(users, null, 2), "utf-8");
+    fs.renameSync(tempFile, USERS_FILE);
+  } catch (err) {
+    console.error("[UserStore] Error writing users file:", err.message);
+    // Cleanup temp file if rename failed
+    try { fs.unlinkSync(tempFile); } catch (_) {}
+    throw err;
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Normalize email: trim + lowercase
+// ─────────────────────────────────────────────────────────────────────────────
+const normalizeEmail = (email) => {
+  if (!email || typeof email !== "string") return "";
+  return email.trim().toLowerCase();
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// createUser — Register a new user
+//
+// @param {string} email         — User's email (will be normalized)
+// @param {string} hashedPassword — Bcrypt-hashed password
+// @returns {{ success: boolean, user?: object, error?: string }}
+// ─────────────────────────────────────────────────────────────────────────────
+const createUser = (email, hashedPassword) => {
+  const normalized = normalizeEmail(email);
+  if (!normalized) {
+    return { success: false, error: "Invalid email address." };
+  }
+
+  const users = readUsers();
+
+  // Check for duplicate email
+  const existing = users.find(u => u.email === normalized);
+  if (existing) {
+    return { success: false, error: "An account with this email already exists." };
+  }
+
+  const newUser = {
+    id: crypto.randomUUID(),
+    email: normalized,
+    password: hashedPassword,
+    displayName: normalized.split("@")[0],
+    isVerified: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  users.push(newUser);
+  writeUsers(users);
+
+  console.log(`[UserStore] ✅ Created user: ${normalized} (ID: ${newUser.id})`);
+
+  // Return user without password hash
+  const { password, ...safeUser } = newUser;
+  return { success: true, user: safeUser };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// findUserByEmail — Lookup user by email
+//
+// @param {string} email — Email to search (will be normalized)
+// @returns {object|null} — Full user object (including password hash) or null
+// ─────────────────────────────────────────────────────────────────────────────
+const findUserByEmail = (email) => {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return null;
+
+  const users = readUsers();
+  return users.find(u => u.email === normalized) || null;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// verifyUser — Mark a user's email as verified (after OTP confirmation)
+//
+// @param {string} email — Email to verify
+// @returns {{ success: boolean, error?: string }}
+// ─────────────────────────────────────────────────────────────────────────────
+const verifyUser = (email) => {
+  const normalized = normalizeEmail(email);
+  const users = readUsers();
+  const idx = users.findIndex(u => u.email === normalized);
+
+  if (idx === -1) {
+    return { success: false, error: "User not found." };
+  }
+
+  users[idx].isVerified = true;
+  users[idx].updatedAt = new Date().toISOString();
+  writeUsers(users);
+
+  console.log(`[UserStore] ✅ Verified email: ${normalized}`);
+  return { success: true };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// updatePassword — Change a user's password (for password reset)
+//
+// @param {string} email          — Email of user
+// @param {string} hashedPassword — New bcrypt-hashed password
+// @returns {{ success: boolean, error?: string }}
+// ─────────────────────────────────────────────────────────────────────────────
+const updatePassword = (email, hashedPassword) => {
+  const normalized = normalizeEmail(email);
+  const users = readUsers();
+  const idx = users.findIndex(u => u.email === normalized);
+
+  if (idx === -1) {
+    return { success: false, error: "User not found." };
+  }
+
+  users[idx].password = hashedPassword;
+  users[idx].updatedAt = new Date().toISOString();
+  writeUsers(users);
+
+  console.log(`[UserStore] ✅ Password updated for: ${normalized}`);
+  return { success: true };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getSafeUser — Return user data without sensitive fields
+//
+// @param {object} user — Full user object
+// @returns {object} — User without password hash
+// ─────────────────────────────────────────────────────────────────────────────
+const getSafeUser = (user) => {
+  if (!user) return null;
+  const { password, ...safeUser } = user;
+  return {
+    ...safeUser,
+    initial: user.email.charAt(0).toUpperCase(),
+  };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// deleteUnverifiedUser — Remove unverified user (for re-registration)
+//
+// @param {string} email — Email of user to delete
+// @returns {{ success: boolean }}
+// ─────────────────────────────────────────────────────────────────────────────
+const deleteUnverifiedUser = (email) => {
+  const normalized = normalizeEmail(email);
+  const users = readUsers();
+  const idx = users.findIndex(u => u.email === normalized && !u.isVerified);
+
+  if (idx === -1) {
+    return { success: false };
+  }
+
+  users.splice(idx, 1);
+  writeUsers(users);
+
+  console.log(`[UserStore] 🗑️  Removed unverified user: ${normalized}`);
+  return { success: true };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// createOrFindSocialUser — Find or create a user from social OAuth provider
+//
+// Handles three cases:
+//   1. Existing verified user → return as-is
+//   2. Existing unverified user → verify + update provider/displayName
+//   3. New user → create with password=null, isVerified=true
+//
+// @param {string} email       — User's email from OAuth provider
+// @param {string} provider    — OAuth provider name ("google" | "twitter")
+// @param {string} displayName — Display name from the OAuth profile
+// @returns {{ success: boolean, user?: object, isNewUser: boolean, error?: string }}
+// ─────────────────────────────────────────────────────────────────────────────
+const createOrFindSocialUser = (email, provider, displayName) => {
+  const normalized = normalizeEmail(email);
+  if (!normalized) {
+    return { success: false, error: "Invalid email address.", isNewUser: false };
+  }
+
+  const users = readUsers();
+  const idx = users.findIndex(u => u.email === normalized);
+
+  // Case 1: Existing verified user — return immediately
+  if (idx !== -1 && users[idx].isVerified) {
+    console.log(`[UserStore] 🔗 Social login (${provider}) for existing user: ${normalized}`);
+    return { success: true, user: getSafeUser(users[idx]), isNewUser: false };
+  }
+
+  // Case 2: Existing unverified user — verify and update provider info
+  if (idx !== -1 && !users[idx].isVerified) {
+    users[idx].isVerified = true;
+    users[idx].provider = provider;
+    users[idx].displayName = displayName || users[idx].displayName;
+    users[idx].updatedAt = new Date().toISOString();
+    writeUsers(users);
+
+    console.log(`[UserStore] ✅ Verified unverified user via ${provider}: ${normalized}`);
+    return { success: true, user: getSafeUser(users[idx]), isNewUser: false };
+  }
+
+  // Case 3: Brand new user — create with social provider
+  const newUser = {
+    id: crypto.randomUUID(),
+    email: normalized,
+    displayName: displayName || normalized.split("@")[0],
+    provider,
+    isVerified: true,
+    password: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  users.push(newUser);
+  writeUsers(users);
+
+  console.log(`[UserStore] ✅ Created social user (${provider}): ${normalized} (ID: ${newUser.id})`);
+  return { success: true, user: getSafeUser(newUser), isNewUser: true };
+};
+
+module.exports = {
+  createUser,
+  findUserByEmail,
+  verifyUser,
+  updatePassword,
+  getSafeUser,
+  deleteUnverifiedUser,
+  normalizeEmail,
+  createOrFindSocialUser,
+};

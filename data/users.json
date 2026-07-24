@@ -1,0 +1,93 @@
+[
+  {
+    "id": "a50630a2-2681-47a3-9745-a353dc363a53",
+    "email": "mrkingm@gmail.com",
+    "password": "$2a$12$sSbzkegaMP0bAVrdgP/Bo.DNnrX/zww9P2Bbm5S8RhYfHI3Imtbae",
+    "displayName": "mrkingm",
+    "isVerified": false,
+    "createdAt": "2026-06-14T08:14:44.154Z",
+    "updatedAt": "2026-06-14T08:14:44.154Z"
+  },
+  {
+    "id": "e5cf8ce0-8d19-40c3-a021-db49ec8074b0",
+    "email": "mrkingm862@gmail.com",
+    "password": "$2a$12$lHMoZRgKJVJ4vD4oQH/cleOJ0VFurxXXIQIzjaXLWI0fpJnIDYazK",
+    "displayName": "mrkingm862",
+    "isVerified": true,
+    "createdAt": "2026-06-14T08:21:26.891Z",
+    "updatedAt": "2026-06-14T08:22:42.206Z"
+  },
+  {
+    "id": "4252e047-19c3-4cbf-b730-d2cea4d1d081",
+    "email": "ambiense995@gmail.com",
+    "password": "$2a$12$VxFRjDP2Gtgmb.5uZFMX.eScJosCcfZGMHpCbPNW/QGmWcqX5qqau",
+    "displayName": "ambiense995",
+    "isVerified": true,
+    "createdAt": "2026-06-14T08:26:53.547Z",
+    "updatedAt": "2026-06-14T08:27:32.777Z"
+  },
+  {
+    "id": "59f39b5e-d196-4eb6-ad8e-dc7720260731",
+    "email": "test-otp@example.com",
+    "password": "$2a$12$VdVvm8LzMHO/Y8cLCQ32jOgqur6ExIeWLhUFdTCjrZMkVxtVOhJ8m",
+    "displayName": "test-otp",
+    "isVerified": false,
+    "createdAt": "2026-06-17T11:18:55.207Z",
+    "updatedAt": "2026-06-17T11:18:55.207Z"
+  },
+  {
+    "id": "2c849df4-0671-49dd-a9a0-bb3a6f62428e",
+    "email": "testfix@gmail.com",
+    "password": "$2a$12$oDi/C4AMQHFfjww9JF0FP..sdZmj8glLqdcYTGwarraEzPd2XVt92",
+    "displayName": "testfix",
+    "isVerified": false,
+    "createdAt": "2026-06-17T11:31:24.532Z",
+    "updatedAt": "2026-06-17T11:31:24.532Z"
+  },
+  {
+    "id": "9b663af6-d081-4f79-9d5f-771fcf76477b",
+    "email": "kathar13275@gmail.com",
+    "password": "$2a$12$uHB5vz7.V9ynxbmN7kipaO7lXQjExMUPUEL14H1KCvHUc6Yax7lY2",
+    "displayName": "kathar13275",
+    "isVerified": true,
+    "createdAt": "2026-06-19T08:46:56.455Z",
+    "updatedAt": "2026-06-19T08:47:58.694Z"
+  },
+  {
+    "id": "e38a5f02-5735-449e-8b3f-b2cdb2f0ce33",
+    "email": "nizaradhul123@gmail.com",
+    "password": "$2a$12$UoxpU4ZtDHQ1ILB2R/lZr.VREicm3TsHOfD4dmxS06.OFuRshQrSy",
+    "displayName": "nizaradhul123",
+    "isVerified": false,
+    "createdAt": "2026-06-23T11:13:12.370Z",
+    "updatedAt": "2026-06-23T11:13:12.370Z"
+  },
+  {
+    "id": "022e26f6-72fe-4b17-be5d-05dbe08f02d1",
+    "email": "nizaradbul123@gmail.com",
+    "password": "$2a$12$OOeHAgFF.O74F7t0EZAhUO9M4Jn8PrVZNhq3YSAF8pmNFeu5WwfDe",
+    "displayName": "nizaradbul123",
+    "isVerified": false,
+    "createdAt": "2026-06-23T11:13:35.390Z",
+    "updatedAt": "2026-06-23T11:13:35.390Z"
+  },
+  {
+    "id": "995f17bb-cdd9-4f1a-9dfd-5b1e59c54b4a",
+    "email": "nizaradbul12@gmail.com",
+    "password": "$2a$12$jM51BdwBw66.8Sxro/KDvOyj5J1UQFzwog08UkIAhWDL8ygu/7L6m",
+    "displayName": "nizaradbul12",
+    "isVerified": true,
+    "createdAt": "2026-06-23T11:13:50.778Z",
+    "updatedAt": "2026-06-23T11:14:37.180Z"
+  },
+  {
+    "id": "19203fcb-277e-4f8e-b010-de2c43b050df",
+    "email": "empirekingdomz123@gmail.com",
+    "displayName": "empire kingdomz",
+    "provider": "google",
+    "isVerified": true,
+    "password": null,
+    "createdAt": "2026-06-29T10:31:18.533Z",
+    "updatedAt": "2026-06-29T10:31:18.533Z"
+  }
+]
