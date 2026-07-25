@@ -105,6 +105,10 @@ const productSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    isApproved: {
+      type: Boolean,
+      default: true, // Default true for official/admin created, but submissions will explicitly override this to false
+    },
     spec: {
       type: String,
       trim: true,

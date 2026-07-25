@@ -374,6 +374,7 @@ app.post("/api/products/create", protect, async (req, res) => {
       has3DModel: hasARSupport === "true" || hasARSupport === true,
       targetSection: priceVal >= 100000 ? "deals_luxury" : "shop_general",
       status: "pending",
+      isApproved: false,
       isOfficial: false,
       submittedBy: submittedBy || req.user?.userId || req.user?._id?.toString() || "unknown",
       source: source || "creator_hub",
@@ -401,7 +402,7 @@ app.post("/api/products/create", protect, async (req, res) => {
 // ── Admin: Fetch all pending submissions ────────────────────────────────────
 app.get("/api/products/pending", protect, restrictTo("admin"), async (req, res) => {
   try {
-    const products = await Product.find({ status: "pending" }).sort({ createdAt: -1 });
+    const products = await Product.find({ status: "pending", isApproved: false }).sort({ createdAt: -1 });
     return res.status(200).json({ success: true, products });
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error fetching pending products:", error.message);
@@ -421,6 +422,7 @@ app.put("/api/products/:id/approve", protect, restrictTo("admin"), async (req, r
     }
 
     product.status = "live";
+    product.isApproved = true;
     product.addedBy = "moderator";
     // Auto-assign target section based on price
     const priceVal = product.dealPrice || product.retailPrice || 0;
