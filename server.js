@@ -152,7 +152,11 @@ app.use(helmet({
 // ── CORS — Dynamic origin whitelist ─────────────────────────────────────────
 // Supports: localhost dev, any *.netlify.app deploy, optional CUSTOM_DOMAIN env
 app.use(cors({
-  origin: ["http://localhost:3000", "https://ambienced.netlify.app"],
+  origin: [
+    "http://localhost:3000", 
+    "https://ambienced.netlify.app",
+    "https://ambience-fronten.vercel.app"
+  ],
   credentials: true
 }));
 
