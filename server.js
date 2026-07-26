@@ -289,6 +289,10 @@ app.put("/api/auth/update-profile",   protect, authController.updateProfile);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 4.5: Product Management Routes
+//
+// ⚠️  ROUTE ORDER MATTERS! In Express, static path segments (like /pending)
+//     MUST be declared BEFORE parameterized segments (like /:id).
+//     Otherwise Express matches "pending" as an :id param → Mongoose CastError.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.get("/api/products", async (req, res) => {
@@ -301,8 +305,35 @@ app.get("/api/products", async (req, res) => {
   }
 });
 
+// ── Admin: Fetch all pending submissions ────────────────────────────────────
+// ⚠️  This MUST be above /api/products/:id — see route order note above.
+app.get("/api/products/pending", protect, restrictTo("admin"), async (req, res) => {
+  try {
+    console.log("[AMBIENCE] 📋 Admin fetching pending products...");
+
+    const products = await Product.find({ status: "pending", isApproved: false })
+      .sort({ createdAt: -1 });
+
+    console.log(`[AMBIENCE] ✅ Found ${products.length} pending product(s)`);
+    return res.status(200).json({ success: true, products });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error fetching pending products:", error.message);
+    console.error("[AMBIENCE]    Stack:", error.stack);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to fetch pending products",
+      details: process.env.NODE_ENV !== "production" ? error.message : undefined,
+    });
+  }
+});
+
 app.get("/api/products/:id", async (req, res) => {
   try {
+    // ── Validate ObjectId to prevent Mongoose CastError ────────────────────
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, error: "Invalid product ID format" });
+    }
+
     const product = await Product.findById(req.params.id);
     if (!product) {
       return res.status(404).json({ success: false, error: "Product not found" });
@@ -340,7 +371,7 @@ app.delete("/api/products/:id", async (req, res) => {
 //
 // Flow: User submits via Creator Hub → saved as pending → Admin moderates
 //   POST   /api/products/create       → User submits product (status: pending)
-//   GET    /api/products/pending       → Admin fetches pending submissions
+//   GET    /api/products/pending       → (moved to STEP 4.5 — route order fix)
 //   PUT    /api/products/:id/approve   → Admin approves → status: live
 //   DELETE /api/products/:id/reject    → Admin rejects → deleted from DB
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -400,17 +431,6 @@ app.post("/api/products/create", protect, async (req, res) => {
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error submitting product:", error.message);
     return res.status(500).json({ success: false, error: "Failed to submit product" });
-  }
-});
-
-// ── Admin: Fetch all pending submissions ────────────────────────────────────
-app.get("/api/products/pending", protect, restrictTo("admin"), async (req, res) => {
-  try {
-    const products = await Product.find({ status: "pending", isApproved: false }).sort({ createdAt: -1 });
-    return res.status(200).json({ success: true, products });
-  } catch (error) {
-    console.error("[AMBIENCE] ❌ Error fetching pending products:", error.message);
-    return res.status(500).json({ success: false, error: "Failed to fetch pending products" });
   }
 });
 
