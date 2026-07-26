@@ -377,11 +377,25 @@ app.delete("/api/products/:id", async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ── User: Get their submissions ─────────────────────────────────────────────
+// Uses req.user._id (MongoDB ObjectId) as the canonical identifier.
+// Also checks userId (UUID) and email as fallbacks for legacy products.
 app.get("/api/products/my-submissions", protect, async (req, res) => {
   try {
-    const userId = req.user?.userId || req.user?._id?.toString();
-    if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
-    const submissions = await Product.find({ submittedBy: userId, source: "creator_hub" }).sort({ createdAt: -1 });
+    const mongoId = req.user?._id?.toString();
+    const uuidId = req.user?.userId;
+    const email = req.user?.email;
+    if (!mongoId && !uuidId) return res.status(401).json({ success: false, error: "Unauthorized" });
+
+    // Query by any possible identifier the product may have been saved with
+    const orConditions = [];
+    if (mongoId) orConditions.push({ submittedBy: mongoId });
+    if (uuidId)  orConditions.push({ submittedBy: uuidId });
+    if (email)   orConditions.push({ submittedBy: email });
+
+    const submissions = await Product.find({
+      $or: orConditions,
+      source: "creator_hub"
+    }).sort({ createdAt: -1 });
     return res.status(200).json({ success: true, submissions });
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error fetching submissions:", error.message);
@@ -389,20 +403,26 @@ app.get("/api/products/my-submissions", protect, async (req, res) => {
   }
 });
 
-// ── User: Cancel their submission ───────────────────────────────────────────
+// ── User: Archive/Cancel their submission ───────────────────────────────────
 app.delete("/api/products/my-submissions/:id", protect, async (req, res) => {
   try {
-    const userId = req.user?.userId || req.user?._id?.toString();
+    const mongoId = req.user?._id?.toString();
+    const uuidId = req.user?.userId;
+    const email = req.user?.email;
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ success: false, error: "Not found" });
-    if (product.submittedBy !== userId) return res.status(403).json({ success: false, error: "Forbidden" });
-    if (product.status !== "pending") return res.status(400).json({ success: false, error: "Can only cancel pending submissions" });
+    // Allow if submittedBy matches any of the user's identifiers
+    const isOwner = [mongoId, uuidId, email].filter(Boolean).includes(product.submittedBy);
+    if (!isOwner) return res.status(403).json({ success: false, error: "Forbidden" });
+    
+    // Soft delete by updating status to 'archived' instead of removing from DB
+    product.status = "archived";
+    await product.save();
 
-    await Product.findByIdAndDelete(req.params.id);
-    return res.status(200).json({ success: true, message: "Submission cancelled" });
+    return res.status(200).json({ success: true, message: "Product archived successfully", status: "archived" });
   } catch (error) {
-    console.error("[AMBIENCE] ❌ Error cancelling submission:", error.message);
-    return res.status(500).json({ success: false, error: "Failed to cancel submission" });
+    console.error("[AMBIENCE] ❌ Error archiving product:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to archive product" });
   }
 });
 
@@ -468,7 +488,7 @@ app.post("/api/products/create", protect, async (req, res) => {
       status: "pending",
       isApproved: false,
       isOfficial: false,
-      submittedBy: submittedBy || req.user?.userId || req.user?._id?.toString() || "unknown",
+      submittedBy: req.user?._id?.toString() || req.user?.userId || "unknown",
       source: source || "creator_hub",
       addedBy: req.user?.email || "creator",
       tag: "CREATOR",
