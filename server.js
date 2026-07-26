@@ -412,33 +412,59 @@ app.post("/api/products/create", protect, async (req, res) => {
     const {
       name, price, category, subcategory, description, imageUrl,
       isOfficial, submittedBy, source, hasARSupport, modelUrl,
+      sizeVariants, colorVariants,
     } = req.body;
 
     // ── Validation ──
     if (!name || !name.trim()) {
       return res.status(400).json({ success: false, error: "Product name is required." });
     }
-    if (!price || parseFloat(price) <= 0) {
+    const priceVal = parseFloat(price);
+    if (!price || isNaN(priceVal) || priceVal <= 0) {
       return res.status(400).json({ success: false, error: "Valid price is required." });
     }
-    if (!category) {
+    if (!category || !category.trim()) {
       return res.status(400).json({ success: false, error: "Category is required." });
     }
+    if (!subcategory || !subcategory.trim()) {
+      return res.status(400).json({ success: false, error: "Subcategory is required. Please select what type of product this is." });
+    }
+    if (!description || !description.trim()) {
+      return res.status(400).json({ success: false, error: "Description is required." });
+    }
+    if (!imageUrl || !imageUrl.trim()) {
+      return res.status(400).json({ success: false, error: "Product image is required." });
+    }
 
-    const priceVal = parseFloat(price);
+    // ── Parse size/color variants (accept arrays or comma-separated strings) ──
+    let parsedSizes = [];
+    if (Array.isArray(sizeVariants)) {
+      parsedSizes = sizeVariants.map(s => s.trim()).filter(Boolean);
+    } else if (typeof sizeVariants === "string" && sizeVariants.trim()) {
+      parsedSizes = sizeVariants.split(",").map(s => s.trim()).filter(Boolean);
+    }
+
+    let parsedColors = [];
+    if (Array.isArray(colorVariants)) {
+      parsedColors = colorVariants.map(s => s.trim()).filter(Boolean);
+    } else if (typeof colorVariants === "string" && colorVariants.trim()) {
+      parsedColors = colorVariants.split(",").map(s => s.trim()).filter(Boolean);
+    }
 
     const product = new Product({
       name: name.trim(),
       brand: "Community Creator",
-      category,
-      subcategory: subcategory || "Other",
+      category: category.trim(),
+      subcategory: subcategory.trim(),
       retailPrice: priceVal,
       dealPrice: priceVal,
-      description: description ? description.trim() : "",
-      imageUrl: imageUrl || "",
+      description: description.trim(),
+      imageUrl: imageUrl.trim(),
       modelUrl: modelUrl || "",
       has3DModel: hasARSupport === "true" || hasARSupport === true,
-      targetSection: "category_only", // Strict enforcement: Exclude from Home, Deals, etc.
+      sizeVariants: parsedSizes,
+      colorVariants: parsedColors,
+      targetSection: "category_only", // Strict enforcement: Exclude from Home, Deals, Trending
       status: "pending",
       isApproved: false,
       isOfficial: false,
@@ -452,7 +478,7 @@ app.post("/api/products/create", protect, async (req, res) => {
 
     await product.save();
 
-    console.log(`[AMBIENCE] 📦 New product submission: "${product.name}" by ${product.submittedBy}`);
+    console.log(`[AMBIENCE] 📦 New product submission: "${product.name}" by ${product.submittedBy} | Category: ${product.category} > ${product.subcategory} | Sizes: [${parsedSizes.join(", ")}] | Colors: [${parsedColors.join(", ")}]`);
 
     return res.status(201).json({
       success: true,
@@ -461,7 +487,13 @@ app.post("/api/products/create", protect, async (req, res) => {
     });
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error submitting product:", error.message);
-    return res.status(500).json({ success: false, error: "Failed to submit product" });
+    console.error("[AMBIENCE]    Stack:", error.stack);
+    // Return Mongoose validation errors cleanly
+    if (error.name === "ValidationError") {
+      const messages = Object.values(error.errors).map(e => e.message);
+      return res.status(400).json({ success: false, error: messages.join(". ") });
+    }
+    return res.status(500).json({ success: false, error: error.message || "Failed to submit product" });
   }
 });
 
