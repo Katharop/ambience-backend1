@@ -376,11 +376,41 @@ app.delete("/api/products/:id", async (req, res) => {
 //   DELETE /api/products/:id/reject    → Admin rejects → deleted from DB
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ── User: Get their submissions ─────────────────────────────────────────────
+app.get("/api/products/my-submissions", protect, async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?._id?.toString();
+    if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+    const submissions = await Product.find({ submittedBy: userId, source: "creator_hub" }).sort({ createdAt: -1 });
+    return res.status(200).json({ success: true, submissions });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error fetching submissions:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to fetch submissions" });
+  }
+});
+
+// ── User: Cancel their submission ───────────────────────────────────────────
+app.delete("/api/products/my-submissions/:id", protect, async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?._id?.toString();
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ success: false, error: "Not found" });
+    if (product.submittedBy !== userId) return res.status(403).json({ success: false, error: "Forbidden" });
+    if (product.status !== "pending") return res.status(400).json({ success: false, error: "Can only cancel pending submissions" });
+
+    await Product.findByIdAndDelete(req.params.id);
+    return res.status(200).json({ success: true, message: "Submission cancelled" });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error cancelling submission:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to cancel submission" });
+  }
+});
+
 // ── User Submission: Create pending product ─────────────────────────────────
 app.post("/api/products/create", protect, async (req, res) => {
   try {
     const {
-      name, price, category, description, imageUrl,
+      name, price, category, subcategory, description, imageUrl,
       isOfficial, submittedBy, source, hasARSupport, modelUrl,
     } = req.body;
 
@@ -401,13 +431,14 @@ app.post("/api/products/create", protect, async (req, res) => {
       name: name.trim(),
       brand: "Community Creator",
       category,
+      subcategory: subcategory || "Other",
       retailPrice: priceVal,
       dealPrice: priceVal,
       description: description ? description.trim() : "",
       imageUrl: imageUrl || "",
       modelUrl: modelUrl || "",
       has3DModel: hasARSupport === "true" || hasARSupport === true,
-      targetSection: priceVal >= 100000 ? "deals_luxury" : "shop_general",
+      targetSection: "category_only", // Strict enforcement: Exclude from Home, Deals, etc.
       status: "pending",
       isApproved: false,
       isOfficial: false,
@@ -448,9 +479,13 @@ app.put("/api/products/:id/approve", protect, restrictTo("admin"), async (req, r
     product.status = "live";
     product.isApproved = true;
     product.addedBy = "moderator";
-    // Auto-assign target section based on price
+    // Auto-assign target section based on price, UNLESS it's a creator product
     const priceVal = product.dealPrice || product.retailPrice || 0;
-    product.targetSection = priceVal >= 100000 ? "deals_luxury" : "shop_general";
+    if (product.source === "creator_hub" || product.isOfficial === false) {
+      product.targetSection = "category_only";
+    } else {
+      product.targetSection = priceVal >= 100000 ? "deals_luxury" : "shop_general";
+    }
 
     await product.save();
 
