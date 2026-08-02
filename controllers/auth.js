@@ -24,7 +24,7 @@ const path = require("path");
 const fs = require("fs");
 
 const User = require("../models/User");
-const generateToken = require("../utils/generateToken");
+const { generateAccessToken, generateRefreshToken } = require("../utils/generateToken");
 const {
   storeOTP,
   verifyOTP: verifyStoredOTP,
@@ -33,6 +33,8 @@ const {
   isAccountLocked,
   clearLoginAttempts,
 } = require("../sessionStore");
+const { setRefreshCookie, clearAuthCookies } = require("../middleware/auth");
+const { recordAuthFailure } = require("../middleware/threatDetection");
 const { generateOTPEmail } = require("../otp-email-template");
 const {
   generateWelcomeEmail,
@@ -212,15 +214,23 @@ exports.register = async (req, res) => {
       logoUrl,
     });
 
-    // Fire-and-forget: respond instantly, email sends in background
-    sendEmail({
-      to: sanitizedEmail,
-      subject: `${otp} — Your AMBIENCE Verification Code`,
-      html: htmlContent,
-      logLabel: "Registration OTP",
-    }).catch((err) =>
-      console.error("[AMBIENCE] ⚠️ Registration OTP email failed:", err.message)
-    );
+    // Send email synchronously to ensure we catch provider errors (e.g. Sandbox limit)
+    try {
+      await sendEmail({
+        to: sanitizedEmail,
+        subject: "Your AMBIENCE Verification Code",
+        html: htmlContent,
+        logLabel: "Registration OTP",
+      });
+    } catch (emailErr) {
+      // Clean up the created user if email fails
+      await User.deleteOne({ _id: user._id });
+      clearOTP(sanitizedEmail);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to send verification code. Please try again later.",
+      });
+    }
 
     // Dev mode: log OTP to console
     if (!resendConfigured) {
@@ -293,7 +303,9 @@ exports.verifyOTP = async (req, res) => {
       }
 
       // Generate JWT
-      const token = generateToken(user._id, user.email, user.role);
+      const token = generateAccessToken(user._id, user.email, user.role);
+      const refreshTkn = generateRefreshToken(user._id, user.email, user.role, user.tokenVersion);
+      setRefreshCookie(res, refreshTkn);
 
       // Send welcome email (non-blocking)
       const logoUrl = getLogoUrl();
@@ -379,6 +391,7 @@ exports.login = async (req, res) => {
 
     if (!user) {
       recordFailedLogin(sanitizedEmail);
+      recordAuthFailure(req);
       return res
         .status(401)
         .json({ success: false, error: "Invalid email or password." });
@@ -407,6 +420,7 @@ exports.login = async (req, res) => {
 
     if (!isMatch) {
       const result = recordFailedLogin(sanitizedEmail);
+      recordAuthFailure(req);
       if (result.locked) {
         return res.status(429).json({
           success: false,
@@ -425,8 +439,10 @@ exports.login = async (req, res) => {
     // Success — clear lockout tracking
     clearLoginAttempts(sanitizedEmail);
 
-    // Issue JWT
-    const token = generateToken(user._id, user.email, user.role);
+    // Issue access token + httpOnly refresh cookie
+    const token = generateAccessToken(user._id, user.email, user.role);
+    const refreshTkn = generateRefreshToken(user._id, user.email, user.role, user.tokenVersion);
+    setRefreshCookie(res, refreshTkn);
 
     console.log(`[AMBIENCE] ✅ Login successful: ${sanitizedEmail}`);
 
@@ -632,8 +648,10 @@ exports.googleLogin = async (req, res) => {
       isNewUser = true;
     }
 
-    // ── Issue JWT ─────────────────────────────────────────────────────────
-    const token = generateToken(user._id, user.email, user.role);
+    // ── Issue access token + httpOnly refresh cookie ─────────────────────
+    const token = generateAccessToken(user._id, user.email, user.role);
+    const refreshTkn = generateRefreshToken(user._id, user.email, user.role, user.tokenVersion);
+    setRefreshCookie(res, refreshTkn);
 
     console.log(
       `[AMBIENCE] ✅ Google OAuth login: ${normalizedEmail} (${isNewUser ? "new" : "existing"} user)`
@@ -773,7 +791,9 @@ exports.twitterAuth = async (req, res) => {
       isNewUser = true;
     }
 
-    const token = generateToken(user._id, user.email, user.role);
+    const token = generateAccessToken(user._id, user.email, user.role);
+    const refreshTkn = generateRefreshToken(user._id, user.email, user.role, user.tokenVersion);
+    setRefreshCookie(res, refreshTkn);
 
     console.log(
       `[AMBIENCE] ✅ Twitter OAuth login: @${twitterUser.username} (${isNewUser ? "new" : "existing"} user)`
@@ -825,12 +845,14 @@ exports.createGuestSession = async (req, res) => {
         email: guestEmail,
         role: "guest",
         isGuest: true,
+        type: "access",
       },
       secret,
       {
-        expiresIn: "24h",
+        expiresIn: "365d",
         algorithm: "HS256",
         issuer: "ambience",
+        audience: "ambience-client",
         subject: guestId,
       }
     );
@@ -852,7 +874,7 @@ exports.createGuestSession = async (req, res) => {
         displayName: "Guest Explorer",
         avatar: null,
       },
-      expiresIn: "24h",
+      expiresIn: "365d",
     });
   } catch (err) {
     console.error("[AMBIENCE] ❌ Guest session error:", err.message);
@@ -900,6 +922,8 @@ exports.getSession = async (req, res) => {
 // This endpoint exists for API consistency and future token blacklisting.
 // ═══════════════════════════════════════════════════════════════════════════════
 exports.logout = async (req, res) => {
+  // Clear the httpOnly refresh token cookie
+  clearAuthCookies(res);
   return res.status(200).json({
     success: true,
     message: "Logged out successfully.",
@@ -951,15 +975,21 @@ exports.forgotPassword = async (req, res) => {
       logoUrl,
     });
 
-    // Fire-and-forget: respond instantly, email sends in background
-    sendEmail({
-      to: sanitizedEmail,
-      subject: `${otp} — AMBIENCE Password Reset Code`,
-      html: htmlContent,
-      logLabel: "Password Reset OTP",
-    }).catch((err) =>
-      console.error("[AMBIENCE] ⚠️ Reset OTP email failed:", err.message)
-    );
+    // Send email synchronously to ensure we catch provider errors
+    try {
+      await sendEmail({
+        to: sanitizedEmail,
+        subject: "AMBIENCE Password Reset Code",
+        html: htmlContent,
+        logLabel: "Password Reset OTP",
+      });
+    } catch (emailErr) {
+      clearOTP(sanitizedEmail);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to send reset code. Please try again later.",
+      });
+    }
 
     if (!resendConfigured) {
       console.log(`\n  🔑  DEV RESET OTP for ${sanitizedEmail}: ${otp}\n`);
@@ -1100,18 +1130,24 @@ exports.resendOTP = async (req, res) => {
 
     const subject =
       type === "reset"
-        ? `${otp} — AMBIENCE Password Reset Code`
-        : `${otp} — Your AMBIENCE Verification Code`;
+        ? "AMBIENCE Password Reset Code"
+        : "Your AMBIENCE Verification Code";
 
-    // Fire-and-forget: respond instantly, email sends in background
-    sendEmail({
-      to: sanitizedEmail,
-      subject,
-      html: htmlContent,
-      logLabel: "Resent OTP",
-    }).catch((err) =>
-      console.error("[AMBIENCE] ⚠️ Resend OTP email failed:", err.message)
-    );
+    // Send email synchronously to catch provider errors
+    try {
+      await sendEmail({
+        to: sanitizedEmail,
+        subject,
+        html: htmlContent,
+        logLabel: "Resent OTP",
+      });
+    } catch (emailErr) {
+      clearOTP(sanitizedEmail);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to resend code. Please try again later.",
+      });
+    }
 
     if (!resendConfigured) {
       console.log(
@@ -1238,3 +1274,167 @@ exports.updateProfile = async (req, res) => {
     });
   }
 };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONTROLLER: refreshToken
+//
+// POST /api/auth/refresh
+//
+// Reads the httpOnly refresh token cookie, verifies it, and issues a new
+// access token + rotated refresh token. This enables silent session renewal
+// without storing tokens in localStorage.
+//
+// Security:
+//   • Refresh token is read from httpOnly cookie (immune to XSS)
+//   • Token version is checked against the database (revocation support)
+//   • Password change timestamp is validated
+//   • New refresh token is issued (rotation prevents replay attacks)
+// ═══════════════════════════════════════════════════════════════════════════════
+exports.refreshToken = async (req, res) => {
+  const refreshTokenValue = req.cookies?.ambience_refresh;
+
+  if (!refreshTokenValue) {
+    return res.status(401).json({
+      success: false,
+      error: "No refresh token provided.",
+      code: "REFRESH_NO_TOKEN",
+    });
+  }
+
+  const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+  if (!secret) {
+    return res.status(500).json({
+      success: false,
+      error: "Server configuration error.",
+    });
+  }
+
+  // ── Step 1: Verify the refresh token JWT ────────────────────────────────
+  let decoded;
+  try {
+    decoded = jwt.verify(refreshTokenValue, secret, {
+      algorithms: ["HS256"],
+      issuer: "ambience",
+      audience: "ambience-client",
+    });
+  } catch (err) {
+    // JWT verification failed — token is genuinely expired/invalid
+    clearAuthCookies(res);
+
+    if (err.name === "TokenExpiredError") {
+      return res.status(401).json({
+        success: false,
+        error: "Refresh token expired. Please sign in again.",
+        code: "REFRESH_TOKEN_EXPIRED",
+      });
+    }
+
+    return res.status(401).json({
+      success: false,
+      error: "Invalid refresh token.",
+      code: "REFRESH_TOKEN_INVALID",
+    });
+  }
+
+  // ── Step 2: Guest refresh (no DB lookup needed) ─────────────────────────
+  if (decoded.isGuest || decoded.role === "guest") {
+    const newAccessToken = jwt.sign(
+      {
+        id: decoded.id,
+        email: decoded.email,
+        role: "guest",
+        isGuest: true,
+        type: "access",
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "365d",
+        algorithm: "HS256",
+        issuer: "ambience",
+        audience: "ambience-client",
+        subject: decoded.id,
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      token: newAccessToken,
+      user: {
+        id: decoded.id,
+        userId: decoded.id,
+        email: decoded.email,
+        name: "Guest Explorer",
+        role: "guest",
+        isGuest: true,
+        initial: "G",
+        displayName: "Guest Explorer",
+      },
+    });
+  }
+
+  // ── Step 3: Regular user refresh (requires DB lookup) ───────────────────
+  // CRITICAL: DB errors during cold-start must return 503 (NOT 401).
+  // Returning 401 would cause the frontend to clear localStorage AND
+  // we'd also clear the httpOnly cookie — double wipe = permanent logout.
+  let user;
+  try {
+    user = await User.findById(decoded.id).select("-password");
+  } catch (dbErr) {
+    // DB not ready (cold-start, connection pool exhausted, etc.)
+    // Do NOT clear cookies — the refresh token is valid, DB is just unavailable
+    console.error("[Auth] Database error during refresh (cold-start?):", dbErr.message);
+    return res.status(503).json({
+      success: false,
+      error: "Service temporarily unavailable. Please try again in a moment.",
+      code: "REFRESH_DB_UNAVAILABLE",
+    });
+  }
+
+  if (!user) {
+    clearAuthCookies(res);
+    return res.status(401).json({
+      success: false,
+      error: "User no longer exists.",
+      code: "REFRESH_USER_NOT_FOUND",
+    });
+  }
+
+  // Check token version (revocation)
+  if (
+    typeof decoded.tokenVersion === "number" &&
+    typeof user.tokenVersion === "number" &&
+    decoded.tokenVersion !== user.tokenVersion
+  ) {
+    clearAuthCookies(res);
+    return res.status(401).json({
+      success: false,
+      error: "Session has been revoked. Please sign in again.",
+      code: "REFRESH_TOKEN_REVOKED",
+    });
+  }
+
+  // Check password change
+  if (user.passwordChangedAt) {
+    const changedTimestamp = Math.floor(user.passwordChangedAt.getTime() / 1000);
+    if (decoded.iat && decoded.iat < changedTimestamp) {
+      clearAuthCookies(res);
+      return res.status(401).json({
+        success: false,
+        error: "Password was changed. Please sign in again.",
+        code: "REFRESH_PASSWORD_CHANGED",
+      });
+    }
+  }
+
+  // Issue new access token + rotated refresh token
+  const newAccessToken = generateAccessToken(user._id, user.email, user.role);
+  const newRefreshToken = generateRefreshToken(user._id, user.email, user.role, user.tokenVersion);
+  setRefreshCookie(res, newRefreshToken);
+
+  return res.status(200).json({
+    success: true,
+    token: newAccessToken,
+    user: user.toSafeObject(),
+  });
+};
+

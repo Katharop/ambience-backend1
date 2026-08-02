@@ -47,8 +47,19 @@ const nodemailer = require("nodemailer");
 
 // ── Auth system imports ─────────────────────────────────────────────────────
 const authController = require("./controllers/auth");
-const { protect }    = require("./middleware/auth");
-const { restrictTo } = require("./middleware/authMiddleware");
+const { protect, requireAdmin } = require("./middleware/auth");
+const { restrictTo }            = require("./middleware/authMiddleware");
+
+// ── Payment system imports ──────────────────────────────────────────────────
+const paymentController = require("./controllers/paymentController");
+
+// ── Enterprise security middleware ──────────────────────────────────────────
+const cookieParser        = require("cookie-parser");
+const mongoSanitize       = require("express-mongo-sanitize");
+const hpp                 = require("hpp");
+const { threatDetection } = require("./middleware/threatDetection");
+const { sanitizeInputs }  = require("./middleware/sanitize");
+const { paymentGuard }    = require("./middleware/paymentGuard");
 
 const Product = require("./models/Product");
 const FlagshipDeal = require("./models/FlagshipDeal");
@@ -144,24 +155,85 @@ const connectDB = async () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 const app = express();
 
-// ── Security headers via Helmet ─────────────────────────────────────────────
+// ── Security headers via Helmet (Enterprise Hardened) ───────────────────────
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", "https:"],
+      fontSrc: ["'self'", "https:", "data:"],
+      objectSrc: ["'none'"],
+      frameSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+    },
+  },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true,
+  },
+  referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  frameguard: { action: "deny" },
+  noSniff: true,
+  xssFilter: true,
 }));
 
-// ── CORS — Dynamic origin whitelist ─────────────────────────────────────────
-// Supports: localhost dev, any *.netlify.app deploy, optional CUSTOM_DOMAIN env
+// ── Cookie parser (required for httpOnly refresh token cookies) ─────────────
+app.use(cookieParser());
+
+// ── CORS — Strict origin whitelist with credentials ─────────────────────────
+const ALLOWED_ORIGINS = [
+  "http://localhost:3000",
+  "https://ambienced.netlify.app",
+  "https://ambience-fronten.vercel.app",
+];
 app.use(cors({
-  origin: [
-    "http://localhost:3000", 
-    "https://ambienced.netlify.app",
-    "https://ambience-fronten.vercel.app"
-  ],
-  credentials: true
+  origin: (origin, callback) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`[CORS] Blocked request from unauthorized origin: ${origin}`);
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  maxAge: 86400,
 }));
 
 // ── JSON body parser ────────────────────────────────────────────────────────
-app.use(express.json({ limit: "3mb" }));
+app.use(express.json({ limit: "1mb" }));
+
+// ── NoSQL Injection Prevention ──────────────────────────────────────────────
+app.use(mongoSanitize());
+
+// ── HTTP Parameter Pollution protection ─────────────────────────────────────
+app.use(hpp());
+
+// ── Threat Detection (per-IP anomaly tracking + auto-blocking) ──────────────
+app.use(threatDetection);
+
+// ── Deep Input Sanitization (XSS + prototype pollution prevention) ──────────
+app.use(sanitizeInputs);
+
+// ── Payment Data Guard (blocks raw financial data in requests) ──────────────
+app.use(paymentGuard);
+
+// ── Global API Rate Limiter ─────────────────────────────────────────────────
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: "Too many requests. Please slow down." },
+});
+app.use("/api", globalLimiter);
 
 // ── Database readiness middleware ───────────────────────────────────────────
 // Returns a clear 503 JSON error when MongoDB is disconnected, instead of
@@ -222,6 +294,14 @@ const socialAuthLimiter = rateLimit({
   message: { success: false, error: "Too many authentication attempts. Please try again later." },
 });
 
+const paymentLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: "Too many payment requests. Please try again after 15 minutes." },
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 3: Nodemailer Transporter (Gmail SMTP)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -280,12 +360,27 @@ app.post("/api/auth/guest",       authController.createGuestSession);
 // Session Validation (protected)
 app.get("/api/auth/session",      protect, authController.getSession);
 
+// Token Refresh (uses httpOnly cookie)
+app.post("/api/auth/refresh",     authController.refreshToken);
+
 // Password Reset
 app.post("/api/auth/forgot-password", otpLimiter, authController.forgotPassword);
 app.post("/api/auth/reset-password",  authLimiter, authController.resetPassword);
 
 // Profile Management (protected)
 app.put("/api/auth/update-profile",   protect, authController.updateProfile);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STEP 4.3: Payment Routes — Razorpay Integration
+//
+// All payment routes are JWT-protected and rate-limited.
+// The paymentGuard middleware (global) already blocks raw financial data.
+// ═══════════════════════════════════════════════════════════════════════════════
+app.post("/api/payment/create-order", paymentLimiter, protect, paymentController.createOrder);
+app.post("/api/payment/verify",       paymentLimiter, protect, paymentController.verifyPayment);
+
+// ── Order History (protected) ───────────────────────────────────────────────
+app.get("/api/orders/my-orders",      protect, paymentController.getMyOrders);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 4.5: Product Management Routes
@@ -345,20 +440,59 @@ app.get("/api/products/:id", async (req, res) => {
   }
 });
 
-app.post("/api/products", async (req, res) => {
+// ── Admin: Create product (PROTECTED — requires admin JWT) ───────────────────
+app.post("/api/products", protect, requireAdmin, async (req, res) => {
   try {
-    const product = new Product(req.body);
+    // ── SECURITY: Explicit field whitelist (prevents mass-assignment attacks) ──
+    const {
+      name, brand, category, subcategory, description,
+      retailPrice, dealPrice, imageUrl, additionalImages,
+      modelUrl, has3DModel, sizeVariants, colorVariants,
+      targetSection, tag, glyph, accent,
+      hasARSupport, arModelUrl, arModelScale, arModelPosition,
+      // Color variant fields for 3D AR
+      colorVariantModels,
+    } = req.body;
+
+    const product = new Product({
+      name, brand, category, subcategory, description,
+      retailPrice, dealPrice, imageUrl, additionalImages,
+      modelUrl, has3DModel, sizeVariants, colorVariants,
+      targetSection, tag, glyph, accent,
+      hasARSupport, arModelUrl, arModelScale, arModelPosition,
+      colorVariantModels,
+      // SECURITY: Force these fields — cannot be set by the request
+      status: "live",
+      isApproved: true,
+      isOfficial: true,
+      addedBy: req.user?.email || "admin",
+      source: "admin",
+    });
+
     await product.save();
+    console.log(`[AMBIENCE] ✅ Admin product created: "${product.name}" by ${req.user?.email}`);
     return res.status(201).json({ success: true, product, message: "Product deployed successfully." });
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error creating product:", error.message);
+    if (error.name === "ValidationError") {
+      const messages = Object.values(error.errors).map(e => e.message);
+      return res.status(400).json({ success: false, error: messages.join(". ") });
+    }
     return res.status(500).json({ success: false, error: "Failed to create product" });
   }
 });
 
-app.delete("/api/products/:id", async (req, res) => {
+// ── Admin: Delete product (PROTECTED — requires admin JWT) ───────────────────
+app.delete("/api/products/:id", protect, requireAdmin, async (req, res) => {
   try {
-    await Product.findByIdAndDelete(req.params.id);
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, error: "Invalid product ID format" });
+    }
+    const deleted = await Product.findByIdAndDelete(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: "Product not found" });
+    }
+    console.log(`[AMBIENCE] 🗑️ Admin deleted product: "${deleted.name}" by ${req.user?.email}`);
     return res.status(200).json({ success: true, message: "Product removed." });
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error deleting product:", error.message);
@@ -587,9 +721,11 @@ app.get("/api/flagship", async (req, res) => {
   }
 });
 
-app.put("/api/flagship", async (req, res) => {
+// ── Admin: Update flagship deal (PROTECTED) ────────────────────────────────
+app.put("/api/flagship", protect, requireAdmin, async (req, res) => {
   try {
     const deal = await FlagshipDeal.findOneAndUpdate({}, req.body, { upsert: true, new: true });
+    console.log(`[AMBIENCE] ✅ Flagship deal updated by ${req.user?.email}`);
     return res.status(200).json({ success: true, deal, message: "Flagship deal saved." });
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error upserting flagship deal:", error.message);
@@ -610,7 +746,15 @@ const getLogoPath = () => {
   return null;
 };
 
-app.post("/api/process-photo", upload.single("photo"), async (req, res) => {
+const photoLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: "Too many photo uploads. Please try again later." },
+});
+
+app.post("/api/process-photo", photoLimiter, upload.single("photo"), async (req, res) => {
   const { email, service, notes } = req.body;
 
   if (!email || !req.file) {
@@ -751,6 +895,7 @@ const startServer = async () => {
     console.log(`  📸  Photo API:  ${SERVER_URL}/api/process-photo`);
     console.log(`  🖼️   Assets:     ${SERVER_URL}/assets/`);
     console.log(`  💚  Health:     ${SERVER_URL}/api/health`);
+    console.log(`  💳  Razorpay:   ${process.env.RAZORPAY_KEY_ID ? "Test Mode (" + process.env.RAZORPAY_KEY_ID.substring(0, 12) + "...)" : "⚠️  Not configured"}`);
     console.log(`  📧  SMTP:       ${transporter ? "Gmail (" + GMAIL_USER + ")" : "⚠️  Not configured (dev mode)"}`);
     console.log("══════════════════════════════════════════════════════════");
     console.log("");

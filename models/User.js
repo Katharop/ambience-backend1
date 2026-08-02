@@ -90,7 +90,7 @@ const userSchema = new mongoose.Schema(
 
     password: {
       type: String,
-      minlength: [6, "Password must be at least 6 characters"],
+      minlength: [8, "Password must be at least 8 characters"],
       select: false, // Never return password by default
     },
 
@@ -143,6 +143,16 @@ const userSchema = new mongoose.Schema(
       },
       default: "local",
     },
+
+    passwordChangedAt: {
+      type: Date,
+      default: null,
+    },
+
+    tokenVersion: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,
@@ -174,8 +184,23 @@ userSchema.pre("save", async function () {
     return;
   }
 
+  // Password complexity: at least 1 uppercase, 1 lowercase, 1 number
+  const complexityRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+  if (!complexityRegex.test(this.password)) {
+    const err = new Error(
+      "Password must contain at least one uppercase letter, one lowercase letter, and one number."
+    );
+    err.name = "ValidationError";
+    throw err;
+  }
+
   const salt = await bcrypt.genSalt(12);
   this.password = await bcrypt.hash(this.password, salt);
+
+  // Track when password was changed (for token invalidation)
+  if (!this.isNew) {
+    this.passwordChangedAt = new Date();
+  }
 });
 
 // ── Method: matchPassword ───────────────────────────────────────────────────
