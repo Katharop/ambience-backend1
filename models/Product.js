@@ -42,10 +42,12 @@ const productSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
-    colorVariants: {
-      type: [String],
-      default: [],
-    },
+    colorVariants: [{
+      name: { type: String, required: true },
+      hex: { type: String, required: true },
+      imageUrl: { type: String, default: '' },
+      modelUrl: { type: String, default: '' },
+    }],
     sizeVariants: {
       type: [String],
       default: [],

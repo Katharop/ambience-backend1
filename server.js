@@ -600,9 +600,12 @@ app.post("/api/products/create", protect, async (req, res) => {
 
     let parsedColors = [];
     if (Array.isArray(colorVariants)) {
-      parsedColors = colorVariants.map(s => s.trim()).filter(Boolean);
+      parsedColors = colorVariants.map(c => {
+        if (typeof c === 'string') return { name: c.trim(), hex: '#000000' };
+        return c;
+      }).filter(Boolean);
     } else if (typeof colorVariants === "string" && colorVariants.trim()) {
-      parsedColors = colorVariants.split(",").map(s => s.trim()).filter(Boolean);
+      parsedColors = colorVariants.split(",").map(s => ({ name: s.trim(), hex: '#000000' })).filter(Boolean);
     }
 
     const product = new Product({
