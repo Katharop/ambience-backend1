@@ -65,14 +65,8 @@ if (RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) {
 // ═══════════════════════════════════════════════════════════════════════════════
 const createOrder = async (req, res) => {
   try {
-    // ── Guard: Razorpay must be configured ──────────────────────────────────
-    if (!razorpayInstance) {
-      return res.status(503).json({
-        success: false,
-        error: "Payment service is not configured. Please contact support.",
-        code: "PAYMENT_NOT_CONFIGURED",
-      });
-    }
+    // ── Check Demo Mode vs Real Razorpay ────────────────────────────────────
+    const isDemoMode = !razorpayInstance;
 
     // ── Validate request body ───────────────────────────────────────────────
     const { items, shippingAddress } = req.body;
@@ -129,16 +123,22 @@ const createOrder = async (req, res) => {
       });
     }
 
-    // ── Create Razorpay order ───────────────────────────────────────────────
-    const razorpayOrder = await razorpayInstance.orders.create({
-      amount: totalPaise,
-      currency: "INR",
-      receipt: `amb_${Date.now()}`,
-      notes: {
-        userEmail: req.user.email,
-        itemCount: items.length.toString(),
-      },
-    });
+    // ── Create Razorpay order (or Demo Order) ───────────────────────────────
+    let razorpayOrderId;
+    if (isDemoMode) {
+      razorpayOrderId = `demo_order_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    } else {
+      const razorpayOrder = await razorpayInstance.orders.create({
+        amount: totalPaise,
+        currency: "INR",
+        receipt: `amb_${Date.now()}`,
+        notes: {
+          userEmail: req.user.email,
+          itemCount: items.length.toString(),
+        },
+      });
+      razorpayOrderId = razorpayOrder.id;
+    }
 
     // ── Save Order to MongoDB (status: Pending) ─────────────────────────────
     const order = new Order({
@@ -156,7 +156,7 @@ const createOrder = async (req, res) => {
       taxAmount: taxPaise,
       totalAmount: totalPaise,
       currency: "INR",
-      razorpay_order_id: razorpayOrder.id,
+      razorpay_order_id: razorpayOrderId,
       paymentStatus: "Pending",
       orderStatus: "Confirmed",
       shippingAddress: shippingAddress || null,
@@ -166,17 +166,17 @@ const createOrder = async (req, res) => {
 
     console.log(
       `[PAYMENT] ✅ Order created: ${order.orderId} | ` +
-      `Razorpay: ${razorpayOrder.id} | ` +
+      `Order: ${razorpayOrderId} | ` +
       `Amount: ₹${totalINR} | User: ${req.user.email}`
     );
 
     // ── Return order details to frontend ────────────────────────────────────
     return res.status(201).json({
       success: true,
-      order_id: razorpayOrder.id,
+      order_id: razorpayOrderId,
       amount: totalPaise,
       currency: "INR",
-      key_id: RAZORPAY_KEY_ID,
+      key_id: RAZORPAY_KEY_ID || "demo_key",
       orderId: order.orderId,
     });
   } catch (error) {
@@ -218,15 +218,6 @@ const createOrder = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 const verifyPayment = async (req, res) => {
   try {
-    // ── Guard: Razorpay must be configured ──────────────────────────────────
-    if (!RAZORPAY_KEY_SECRET) {
-      return res.status(503).json({
-        success: false,
-        error: "Payment verification service is not configured.",
-        code: "PAYMENT_NOT_CONFIGURED",
-      });
-    }
-
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
 
     // ── Validate required fields ────────────────────────────────────────────
@@ -238,17 +229,35 @@ const verifyPayment = async (req, res) => {
       });
     }
 
-    // ── Server-side signature verification (HMAC-SHA256) ────────────────────
-    const body = razorpay_order_id + "|" + razorpay_payment_id;
-    const expectedSignature = crypto
-      .createHmac("sha256", RAZORPAY_KEY_SECRET)
-      .update(body)
-      .digest("hex");
+    const isDemoMode = razorpay_order_id.startsWith("demo_order_");
 
-    const isSignatureValid = crypto.timingSafeEqual(
-      Buffer.from(expectedSignature, "hex"),
-      Buffer.from(razorpay_signature, "hex")
-    );
+    // ── Guard: Razorpay must be configured (if not demo) ────────────────────
+    if (!isDemoMode && !RAZORPAY_KEY_SECRET) {
+      return res.status(503).json({
+        success: false,
+        error: "Payment verification service is not configured.",
+        code: "PAYMENT_NOT_CONFIGURED",
+      });
+    }
+
+    let isSignatureValid = false;
+
+    if (isDemoMode) {
+      // Automatically approve demo mode payments
+      isSignatureValid = true;
+    } else {
+      // ── Server-side signature verification (HMAC-SHA256) ────────────────────
+      const body = razorpay_order_id + "|" + razorpay_payment_id;
+      const expectedSignature = crypto
+        .createHmac("sha256", RAZORPAY_KEY_SECRET)
+        .update(body)
+        .digest("hex");
+
+      isSignatureValid = crypto.timingSafeEqual(
+        Buffer.from(expectedSignature, "hex"),
+        Buffer.from(razorpay_signature, "hex")
+      );
+    }
 
     // ── Find the order in MongoDB ───────────────────────────────────────────
     const order = await Order.findOne({
