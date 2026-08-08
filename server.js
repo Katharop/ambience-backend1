@@ -303,36 +303,9 @@ const paymentLimiter = rateLimit({
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// STEP 3: Nodemailer Transporter (Gmail SMTP)
+// STEP 3: Email Service (shared Nodemailer/Gmail transporter)
 // ═══════════════════════════════════════════════════════════════════════════════
-let transporter = null;
-
-const isValidGmailConfig = GMAIL_USER &&
-                           GMAIL_PASS &&
-                           !GMAIL_USER.includes("your-") &&
-                           !GMAIL_PASS.includes("xxxx");
-
-if (isValidGmailConfig) {
-  transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: { user: GMAIL_USER, pass: GMAIL_PASS },
-  });
-
-  transporter.verify()
-    .then(() => console.log("  ✅  Gmail SMTP connection verified"))
-    .catch((err) => {
-      console.error("  ❌  Gmail SMTP verification failed:", err.message);
-      console.error("     → Check GMAIL_USER and GMAIL_APP_PASSWORD in .env");
-    });
-} else {
-  console.log("");
-  console.log("  ╔════════════════════════════════════════════════════════╗");
-  console.log("  ║  🚀  DEVELOPMENT MODE — Email logging to console      ║");
-  console.log("  ║  OTP codes will appear in the terminal.               ║");
-  console.log("  ║  Configure .env to enable real email delivery.        ║");
-  console.log("  ╚════════════════════════════════════════════════════════╝");
-  console.log("");
-}
+const { sendEmail: sendServiceEmail, isEmailConfigured } = require("./utils/emailService");
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 4: Auth Routes — Delegated to controllers/auth.js
@@ -369,6 +342,112 @@ app.post("/api/auth/reset-password",  authLimiter, authController.resetPassword)
 
 // Profile Management (protected)
 app.put("/api/auth/update-profile",   protect, authController.updateProfile);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STEP 4.2: User Address Management Routes
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /api/users/addresses — Fetch all saved addresses
+app.get("/api/users/addresses", protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select("savedAddresses");
+    if (!user) return res.status(404).json({ success: false, error: "User not found." });
+    return res.status(200).json({ success: true, addresses: user.savedAddresses });
+  } catch (err) {
+    console.error("[AMBIENCE] ❌ Fetch addresses error:", err.message);
+    return res.status(500).json({ success: false, error: "Failed to fetch addresses." });
+  }
+});
+
+// POST /api/users/addresses — Add a new shipping address
+app.post("/api/users/addresses", protect, async (req, res) => {
+  try {
+    const { label, houseNo, street, landmark, city, state, zip, country, isDefault } = req.body;
+    if (!houseNo || !street || !city || !state || !zip) {
+      return res.status(400).json({ success: false, error: "House No., Street, City, State, and Pincode are required." });
+    }
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ success: false, error: "User not found." });
+
+    // If this address is default, unset all others
+    if (isDefault) {
+      user.savedAddresses.forEach(addr => { addr.isDefault = false; });
+    }
+    // If it's the first address, make it default
+    const makeDefault = isDefault || user.savedAddresses.length === 0;
+
+    user.savedAddresses.push({ label: label || "Home", houseNo, street, landmark: landmark || "", city, state, zip, country: country || "India", isDefault: makeDefault });
+    await user.save();
+
+    console.log(`[AMBIENCE] ✅ Address added for ${user.email}`);
+    return res.status(201).json({ success: true, message: "Address added successfully.", addresses: user.savedAddresses });
+  } catch (err) {
+    console.error("[AMBIENCE] ❌ Add address error:", err.message);
+    if (err.name === "ValidationError") {
+      const messages = Object.values(err.errors).map(e => e.message);
+      return res.status(400).json({ success: false, error: messages.join(", ") });
+    }
+    return res.status(500).json({ success: false, error: "Failed to add address." });
+  }
+});
+
+// PUT /api/users/addresses/:addressId — Update an existing address
+app.put("/api/users/addresses/:addressId", protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ success: false, error: "User not found." });
+
+    const address = user.savedAddresses.id(req.params.addressId);
+    if (!address) return res.status(404).json({ success: false, error: "Address not found." });
+
+    const { label, houseNo, street, landmark, city, state, zip, country, isDefault } = req.body;
+    if (label !== undefined) address.label = label;
+    if (houseNo !== undefined) address.houseNo = houseNo;
+    if (street !== undefined) address.street = street;
+    if (landmark !== undefined) address.landmark = landmark;
+    if (city !== undefined) address.city = city;
+    if (state !== undefined) address.state = state;
+    if (zip !== undefined) address.zip = zip;
+    if (country !== undefined) address.country = country;
+    if (isDefault) {
+      user.savedAddresses.forEach(addr => { addr.isDefault = false; });
+      address.isDefault = true;
+    }
+
+    await user.save();
+    console.log(`[AMBIENCE] ✅ Address updated for ${user.email}`);
+    return res.status(200).json({ success: true, message: "Address updated.", addresses: user.savedAddresses });
+  } catch (err) {
+    console.error("[AMBIENCE] ❌ Update address error:", err.message);
+    return res.status(500).json({ success: false, error: "Failed to update address." });
+  }
+});
+
+// DELETE /api/users/addresses/:addressId — Remove an address
+app.delete("/api/users/addresses/:addressId", protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ success: false, error: "User not found." });
+
+    const address = user.savedAddresses.id(req.params.addressId);
+    if (!address) return res.status(404).json({ success: false, error: "Address not found." });
+
+    const wasDefault = address.isDefault;
+    user.savedAddresses.pull(req.params.addressId);
+
+    // If the deleted address was default, make the first remaining one default
+    if (wasDefault && user.savedAddresses.length > 0) {
+      user.savedAddresses[0].isDefault = true;
+    }
+
+    await user.save();
+    console.log(`[AMBIENCE] ✅ Address deleted for ${user.email}`);
+    return res.status(200).json({ success: true, message: "Address removed.", addresses: user.savedAddresses });
+  } catch (err) {
+    console.error("[AMBIENCE] ❌ Delete address error:", err.message);
+    return res.status(500).json({ success: false, error: "Failed to delete address." });
+  }
+});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 4.3: Payment Routes — Razorpay Integration
@@ -782,25 +861,13 @@ app.post("/api/process-photo", photoLimiter, upload.single("photo"), async (req,
       logoUrl,
     });
 
-    if (transporter) {
-      const attachments = [];
-      if (logoPath) {
-        attachments.push({
-          filename: path.basename(logoPath),
-          path: logoPath,
-          cid: "ambience-logo",
-        });
-      }
-
-      await transporter.sendMail({
-        from: `"AMBIENCE" <${GMAIL_USER}>`,
+    if (isEmailConfigured()) {
+      await sendServiceEmail({
         to: email,
         subject: "✨ Your AMBIENCE Style Feedback is Ready",
         html: htmlContent,
-        attachments,
+        logLabel: 'Photo Feedback',
       });
-
-      console.log(`[AMBIENCE] ✉️  Photo Feedback sent to ${email}`);
     } else {
       console.log(`[AMBIENCE] 📸 Photo Feedback for ${email} (dev mode — email logged)`);
     }
@@ -827,7 +894,7 @@ app.get("/api/health", (req, res) => {
     status: "ok",
     service: "AMBIENCE Authentication & Service Engine v3.0",
     database: dbStates[mongoose.connection.readyState] || "unknown",
-    smtp: transporter ? "configured" : "dev-mode",
+    smtp: isEmailConfigured() ? "configured" : "dev-mode",
     timestamp: new Date().toISOString(),
   });
 });
@@ -899,7 +966,7 @@ const startServer = async () => {
     console.log(`  🖼️   Assets:     ${SERVER_URL}/assets/`);
     console.log(`  💚  Health:     ${SERVER_URL}/api/health`);
     console.log(`  💳  Razorpay:   ${process.env.RAZORPAY_KEY_ID ? "Test Mode (" + process.env.RAZORPAY_KEY_ID.substring(0, 12) + "...)" : "⚠️  Not configured"}`);
-    console.log(`  📧  SMTP:       ${transporter ? "Gmail (" + GMAIL_USER + ")" : "⚠️  Not configured (dev mode)"}`);
+    console.log(`  📧  SMTP:       ${isEmailConfigured() ? "Gmail (" + GMAIL_USER + ")" : "⚠️  Not configured (dev mode)"}`);
     console.log("══════════════════════════════════════════════════════════");
     console.log("");
   });

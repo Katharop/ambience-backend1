@@ -19,7 +19,7 @@
 const { OAuth2Client } = require("google-auth-library");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
-const { Resend } = require("resend");
+const { sendEmail, isEmailConfigured } = require("../utils/emailService");
 const path = require("path");
 const fs = require("fs");
 
@@ -49,19 +49,7 @@ const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
 
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Resend Email Setup
-// ─────────────────────────────────────────────────────────────────────────────
-const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
-const resendConfigured = !!RESEND_API_KEY && !RESEND_API_KEY.includes("YOUR_");
-let resend = null;
 
-if (resendConfigured) {
-  resend = new Resend(RESEND_API_KEY);
-  console.log("[AuthController] ✅ Resend email service initialized");
-} else {
-  console.log("[AuthController] ⚠️  RESEND_API_KEY not set — emails will log to console (dev mode)");
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Utility: Secure 6-digit OTP
@@ -90,8 +78,12 @@ const validatePassword = (password) => {
   if (!password || typeof password !== "string") {
     return "Password is required.";
   }
-  if (password.length < 6) {
-    return "Password must be at least 6 characters.";
+  if (password.length < 8) {
+    return "Password must be at least 8 characters.";
+  }
+  const complexityRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/;
+  if (!complexityRegex.test(password)) {
+    return "Password must contain at least one uppercase letter, one lowercase letter, and one number.";
   }
   if (password.length > 128) {
     return "Password must be less than 128 characters.";
@@ -102,54 +94,7 @@ const validatePassword = (password) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Utility: Logo path resolver
 // ─────────────────────────────────────────────────────────────────────────────
-const getLogoPath = () => {
-  const logoExtensions = [".png", ".jpg", ".jpeg", ".webp", ".svg"];
-  for (const ext of logoExtensions) {
-    const logoPath = path.join(__dirname, "..", "assets", `ambience-logo${ext}`);
-    if (fs.existsSync(logoPath)) {
-      return logoPath;
-    }
-  }
-  return null;
-};
-
-const getLogoUrl = () => {
-  const p = getLogoPath();
-  return p ? "cid:ambience-logo" : null;
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Utility: Send email via Resend (or log in dev mode)
-// ─────────────────────────────────────────────────────────────────────────────
-const sendEmail = async ({ to, subject, html, logLabel = "Email" }) => {
-  if (resend) {
-    const { data, error } = await resend.emails.send({
-      from: "Ambience <onboarding@resend.dev>",
-      to: [to],
-      subject,
-      html,
-    });
-
-    if (error) {
-      console.error(`[AMBIENCE] ❌ ${logLabel} send failed:`, error.message);
-      throw new Error(error.message);
-    }
-
-    console.log(
-      `[AMBIENCE] ✉️  ${logLabel} sent to ${to} | ID: ${data.id}`
-    );
-    return data;
-  } else {
-    console.log("");
-    console.log("┌─────────────────────────────────────────────────┐");
-    console.log(`│  📧  AMBIENCE ${logLabel} — DEV MODE`.padEnd(50) + "│");
-    console.log(`│  To:  ${to}`.padEnd(50) + "│");
-    console.log("│  (Set RESEND_API_KEY in .env for real delivery)  │");
-    console.log("└─────────────────────────────────────────────────┘");
-    console.log("");
-    return null;
-  }
-};
+const getLogoUrl = () => null;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONTROLLER: register
@@ -158,7 +103,7 @@ const sendEmail = async ({ to, subject, html, logLabel = "Email" }) => {
 // Body: { email, password, confirmPassword, name? }
 // ═══════════════════════════════════════════════════════════════════════════════
 exports.register = async (req, res) => {
-  const { email, password, confirmPassword, name } = req.body;
+  const { email, password, confirmPassword, name, phone } = req.body;
 
   const sanitizedEmail = validateEmail(email);
   if (!sanitizedEmail) {
@@ -198,6 +143,7 @@ exports.register = async (req, res) => {
       email: sanitizedEmail,
       password,
       name: name || sanitizedEmail.split("@")[0],
+      phone: phone || null,
       provider: "local",
     });
 
@@ -233,7 +179,7 @@ exports.register = async (req, res) => {
     }
 
     // Dev mode: log OTP to console
-    if (!resendConfigured) {
+    if (!isEmailConfigured()) {
       console.log(`\n  🔑  DEV OTP for ${sanitizedEmail}: ${otp}\n`);
     }
 
@@ -991,7 +937,7 @@ exports.forgotPassword = async (req, res) => {
       });
     }
 
-    if (!resendConfigured) {
+    if (!isEmailConfigured()) {
       console.log(`\n  🔑  DEV RESET OTP for ${sanitizedEmail}: ${otp}\n`);
     }
 
@@ -1149,7 +1095,7 @@ exports.resendOTP = async (req, res) => {
       });
     }
 
-    if (!resendConfigured) {
+    if (!isEmailConfigured()) {
       console.log(
         `\n  🔑  DEV RESEND OTP for ${sanitizedEmail}: ${otp}\n`
       );

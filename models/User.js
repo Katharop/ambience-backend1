@@ -45,6 +45,16 @@ const addressSchema = new mongoose.Schema(
       trim: true,
       required: true,
     },
+    houseNo: {
+      type: String,
+      trim: true,
+      required: [true, 'House/Flat number is required']
+    },
+    landmark: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     country: {
       type: String,
       trim: true,
