@@ -25,8 +25,8 @@ const OTP_MAX_ATTEMPTS = 5;
  * Store an OTP for a given email and type.
  * Overwrites any existing OTP for the same email+type.
  */
-const storeOTP = (email, otp, type = "register") => {
-  const key = `${email.toLowerCase()}:${type}`;
+const storeOTP = (identifier, otp, type = "register") => {
+  const key = `${identifier.toLowerCase()}:${type}`;
   otpStore.set(key, {
     otp,
     expiresAt: Date.now() + OTP_TTL_MS,
@@ -38,8 +38,8 @@ const storeOTP = (email, otp, type = "register") => {
  * Verify an OTP. Returns { valid: true } or { valid: false, error: string }.
  * Automatically clears the OTP on success or max attempts.
  */
-const verifyOTP = (email, otp, type = "register") => {
-  const key = `${email.toLowerCase()}:${type}`;
+const verifyOTP = (identifier, otp, type = "register") => {
+  const key = `${identifier.toLowerCase()}:${type}`;
   const entry = otpStore.get(key);
 
   if (!entry) {
@@ -82,8 +82,8 @@ const verifyOTP = (email, otp, type = "register") => {
 /**
  * Clear any stored OTP for the given email (all types).
  */
-const clearOTP = (email) => {
-  const prefix = email.toLowerCase();
+const clearOTP = (identifier) => {
+  const prefix = identifier.toLowerCase();
   for (const key of otpStore.keys()) {
     if (key.startsWith(prefix)) {
       otpStore.delete(key);
@@ -102,8 +102,8 @@ const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
  * Check if an account is currently locked.
  * Returns { locked: boolean, remainingSeconds?: number }
  */
-const isAccountLocked = (email) => {
-  const key = email.toLowerCase();
+const isAccountLocked = (identifier) => {
+  const key = identifier.toLowerCase();
   const entry = loginAttempts.get(key);
 
   if (!entry || !entry.lockedUntil) {
@@ -126,8 +126,8 @@ const isAccountLocked = (email) => {
  * Record a failed login attempt.
  * Returns { locked: boolean, remainingAttempts: number }
  */
-const recordFailedLogin = (email) => {
-  const key = email.toLowerCase();
+const recordFailedLogin = (identifier) => {
+  const key = identifier.toLowerCase();
   let entry = loginAttempts.get(key);
 
   if (!entry) {
@@ -151,8 +151,8 @@ const recordFailedLogin = (email) => {
 /**
  * Clear login attempt tracking after a successful login.
  */
-const clearLoginAttempts = (email) => {
-  loginAttempts.delete(email.toLowerCase());
+const clearLoginAttempts = (identifier) => {
+  loginAttempts.delete(identifier.toLowerCase());
 };
 
 // ── Periodic Cleanup (every 5 minutes) ──────────────────────────────────────

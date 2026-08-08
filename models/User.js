@@ -87,8 +87,8 @@ const userSchema = new mongoose.Schema(
 
     email: {
       type: String,
-      required: [true, "Email is required"],
       unique: true,
+      sparse: true,
       lowercase: true,
       trim: true,
       match: [
@@ -129,7 +129,8 @@ const userSchema = new mongoose.Schema(
     phone: {
       type: String,
       trim: true,
-      default: null,
+      unique: true,
+      sparse: true,
     },
 
     savedAddresses: {
@@ -194,7 +195,11 @@ userSchema.virtual("displayName").get(function () {
 // ── Pre-save Hook: Hash password ────────────────────────────────────────────
 // Only hashes if the password field has been modified (or is new).
 // Skips for social auth users who have no password.
-userSchema.pre("save", async function () {
+userSchema.pre("save", async function (next) {
+  if (!this.email && !this.phone) {
+    return next(new Error("Either email or phone is required"));
+  }
+
   // Skip if password wasn't modified or doesn't exist
   if (!this.isModified("password") || !this.password) {
     return;

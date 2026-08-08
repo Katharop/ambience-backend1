@@ -103,10 +103,14 @@ const getLogoUrl = () => null;
 // Body: { email, password, confirmPassword, name? }
 // ═══════════════════════════════════════════════════════════════════════════════
 exports.register = async (req, res) => {
-  const { email, password, confirmPassword, name, phone } = req.body;
+  const { email, phone, password, confirmPassword, name, preferredChannel } = req.body;
 
-  const sanitizedEmail = validateEmail(email);
-  if (!sanitizedEmail) {
+  if (!email && !phone) {
+    return res.status(400).json({ success: false, error: "Email or phone is required." });
+  }
+
+  const sanitizedEmail = email ? validateEmail(email) : null;
+  if (email && !sanitizedEmail) {
     return res
       .status(400)
       .json({ success: false, error: "Please enter a valid email address." });
@@ -124,7 +128,10 @@ exports.register = async (req, res) => {
   }
 
   try {
-    const existingUser = await User.findOne({ email: sanitizedEmail });
+    const query = [];
+    if (sanitizedEmail) query.push({ email: sanitizedEmail });
+    if (phone) query.push({ phone });
+    const existingUser = await User.findOne({ $or: query });
 
     if (existingUser) {
       if (existingUser.isVerified) {
@@ -139,53 +146,56 @@ exports.register = async (req, res) => {
     }
 
     // Create user (password hashing handled by pre-save hook in User model)
+    const defaultName = name || (sanitizedEmail ? sanitizedEmail.split("@")[0] : phone);
     const user = await User.create({
-      email: sanitizedEmail,
+      email: sanitizedEmail || undefined,
       password,
-      name: name || sanitizedEmail.split("@")[0],
-      phone: phone || null,
+      name: defaultName,
+      phone: phone || undefined,
       provider: "local",
     });
 
     // Generate and store OTP server-side
     const otp = generateSecureOTP();
-    storeOTP(sanitizedEmail, otp, "register");
+    const identifier = preferredChannel === 'sms' && phone ? phone : (sanitizedEmail || phone);
+    storeOTP(identifier, otp, "register");
 
-    // Send OTP email
-    const logoUrl = getLogoUrl();
-    const htmlContent = generateOTPEmail({
-      otp,
-      email: sanitizedEmail,
-      expiry: 20,
-      logoUrl,
-    });
-
-    // Send email synchronously to ensure we catch provider errors (e.g. Sandbox limit)
-    try {
-      await sendEmail({
-        to: sanitizedEmail,
-        subject: "Your AMBIENCE Verification Code",
-        html: htmlContent,
-        logLabel: "Registration OTP",
+    if (preferredChannel === 'sms' && phone) {
+      try {
+        const { sendSMS } = require("../utils/smsService");
+        await sendSMS({ to: phone, message: `Your AMBIENCE Verification Code is ${otp}`, logLabel: "Registration OTP" });
+      } catch (smsErr) {
+        await User.deleteOne({ _id: user._id });
+        clearOTP(identifier);
+        return res.status(500).json({ success: false, error: "Failed to send SMS code." });
+      }
+    } else {
+      // Send OTP email
+      const logoUrl = getLogoUrl();
+      const htmlContent = generateOTPEmail({
+        otp,
+        email: sanitizedEmail,
+        expiry: 20,
+        logoUrl,
       });
-    } catch (emailErr) {
-      // Clean up the created user if email fails
-      await User.deleteOne({ _id: user._id });
-      clearOTP(sanitizedEmail);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to send verification code. Please try again later.",
-      });
-    }
 
-    // Dev mode: log OTP to console
-    if (!isEmailConfigured()) {
-      console.log(`\n  🔑  DEV OTP for ${sanitizedEmail}: ${otp}\n`);
+      try {
+        await sendEmail({
+          to: sanitizedEmail,
+          subject: "Your AMBIENCE Verification Code",
+          html: htmlContent,
+          logLabel: "Registration OTP",
+        });
+      } catch (emailErr) {
+        await User.deleteOne({ _id: user._id });
+        clearOTP(identifier);
+        return res.status(500).json({ success: false, error: "Failed to send email verification code." });
+      }
     }
 
     return res.status(200).json({
       success: true,
-      message: "Verification code sent to your email. Please check your inbox.",
+      message: "Verification code sent. Please check your messages.",
     });
   } catch (err) {
     console.error("[AMBIENCE] ❌ Registration error:", err.message);
@@ -211,13 +221,13 @@ exports.register = async (req, res) => {
 // Body: { email, otp, type: "register" | "reset" }
 // ═══════════════════════════════════════════════════════════════════════════════
 exports.verifyOTP = async (req, res) => {
-  const { email, otp, type = "register" } = req.body;
+  const { email, phone, otp, type = "register" } = req.body;
 
-  const sanitizedEmail = validateEmail(email);
-  if (!sanitizedEmail) {
-    return res
-      .status(400)
-      .json({ success: false, error: "Invalid email address." });
+  const sanitizedEmail = email ? validateEmail(email) : null;
+  const identifier = sanitizedEmail || phone;
+
+  if (!identifier) {
+    return res.status(400).json({ success: false, error: "Email or phone is required." });
   }
 
   if (!otp || typeof otp !== "string" || otp.length !== 6) {
@@ -228,15 +238,18 @@ exports.verifyOTP = async (req, res) => {
   }
 
   try {
-    const result = verifyStoredOTP(sanitizedEmail, otp, type);
+    const result = verifyStoredOTP(identifier, otp, type);
     if (!result.valid) {
       return res.status(400).json({ success: false, error: result.error });
     }
 
     if (type === "register") {
-      // Mark user as verified
+      const query = [];
+      if (sanitizedEmail) query.push({ email: sanitizedEmail });
+      if (phone) query.push({ phone });
+
       const user = await User.findOneAndUpdate(
-        { email: sanitizedEmail },
+        { $or: query },
         { isVerified: true },
         { new: true }
       );
@@ -254,19 +267,25 @@ exports.verifyOTP = async (req, res) => {
       setRefreshCookie(res, refreshTkn);
 
       // Send welcome email (non-blocking)
-      const logoUrl = getLogoUrl();
-      sendEmail({
-        to: sanitizedEmail,
-        subject: "✨ Welcome to AMBIENCE — Your Vault is Ready",
-        html: generateWelcomeEmail({
-          email: sanitizedEmail,
-          name: user.displayName,
-          logoUrl,
-        }),
-        logLabel: "Welcome Email",
-      }).catch((err) =>
-        console.error("[AMBIENCE] Welcome email error:", err.message)
-      );
+      if (sanitizedEmail) {
+        const logoUrl = getLogoUrl();
+        sendEmail({
+          to: sanitizedEmail,
+          subject: "✨ Welcome to AMBIENCE — Your Vault is Ready",
+          html: generateWelcomeEmail({
+            email: sanitizedEmail,
+            name: user.displayName,
+            logoUrl,
+          }),
+          logLabel: "Welcome Email",
+        }).catch((err) =>
+          console.error("[AMBIENCE] Welcome email error:", err.message)
+        );
+      } else if (phone) {
+        const { sendSMS } = require("../utils/smsService");
+        sendSMS({ to: phone, message: `Welcome to AMBIENCE! Your vault is ready.`, logLabel: "Welcome SMS" })
+          .catch(err => console.error(err));
+      }
 
       return res.status(200).json({
         success: true,
@@ -303,13 +322,15 @@ exports.verifyOTP = async (req, res) => {
 // Body: { email, password }
 // ═══════════════════════════════════════════════════════════════════════════════
 exports.login = async (req, res) => {
-  const { email, password } = req.body;
+  const { email, phone, password } = req.body;
 
-  const sanitizedEmail = validateEmail(email);
-  if (!sanitizedEmail) {
+  const sanitizedEmail = email ? validateEmail(email) : null;
+  const identifier = sanitizedEmail || phone;
+
+  if (!identifier) {
     return res
       .status(400)
-      .json({ success: false, error: "Please enter a valid email address." });
+      .json({ success: false, error: "Please enter a valid email address or phone number." });
   }
 
   if (!password || typeof password !== "string") {
@@ -320,7 +341,7 @@ exports.login = async (req, res) => {
 
   try {
     // Check lockout FIRST
-    const lockStatus = isAccountLocked(sanitizedEmail);
+    const lockStatus = isAccountLocked(identifier);
     if (lockStatus.locked) {
       return res.status(429).json({
         success: false,
@@ -331,12 +352,16 @@ exports.login = async (req, res) => {
     }
 
     // Find user — explicitly select password field
-    const user = await User.findOne({ email: sanitizedEmail }).select(
+    const query = [];
+    if (sanitizedEmail) query.push({ email: sanitizedEmail });
+    if (phone) query.push({ phone });
+    
+    const user = await User.findOne({ $or: query }).select(
       "+password"
     );
 
     if (!user) {
-      recordFailedLogin(sanitizedEmail);
+      recordFailedLogin(identifier);
       recordAuthFailure(req);
       return res
         .status(401)
@@ -365,7 +390,7 @@ exports.login = async (req, res) => {
     const isMatch = await user.matchPassword(password);
 
     if (!isMatch) {
-      const result = recordFailedLogin(sanitizedEmail);
+      const result = recordFailedLogin(identifier);
       recordAuthFailure(req);
       if (result.locked) {
         return res.status(429).json({
@@ -383,7 +408,7 @@ exports.login = async (req, res) => {
     }
 
     // Success — clear lockout tracking
-    clearLoginAttempts(sanitizedEmail);
+    clearLoginAttempts(identifier);
 
     // Issue access token + httpOnly refresh cookie
     const token = generateAccessToken(user._id, user.email, user.role);
