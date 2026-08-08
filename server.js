@@ -326,6 +326,7 @@ app.post("/api/auth/logout",      authController.logout);
 // Social OAuth
 app.post("/api/auth/google",      socialAuthLimiter, authController.googleLogin);
 app.post("/api/auth/twitter",     socialAuthLimiter, authController.twitterAuth);
+app.post("/api/auth/apple",      socialAuthLimiter, authController.appleLogin);
 
 // Guest Session
 app.post("/api/auth/guest",       authController.createGuestSession);

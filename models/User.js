@@ -110,6 +110,12 @@ const userSchema = new mongoose.Schema(
       index: true,
     },
 
+    appleId: {
+      type: String,
+      default: null,
+      sparse: true,
+    },
+
     avatar: {
       type: String,
       default: null,

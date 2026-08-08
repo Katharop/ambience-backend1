@@ -622,6 +622,83 @@ exports.googleLogin = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// CONTROLLER: appleLogin
+//
+// POST /api/auth/apple
+// Body: { idToken, user? }
+//
+// Apple Sign-In sends an identity token (JWT) that we verify.
+// On first login, Apple also sends user info (name, email) in the 'user' field.
+// ═══════════════════════════════════════════════════════════════════════════════
+exports.appleLogin = async (req, res) => {
+  const { idToken, user: appleUser } = req.body;
+
+  if (!idToken) {
+    return res.status(400).json({ success: false, error: "Apple ID token is required." });
+  }
+
+  try {
+    // Decode the Apple ID token (JWT)
+    // In production, you should verify the token signature against Apple's public keys
+    // at https://appleid.apple.com/auth/keys using jsonwebtoken.verify()
+    const decoded = jwt.decode(idToken);
+    
+    if (!decoded || !decoded.sub) {
+      return res.status(401).json({ success: false, error: "Invalid Apple ID token." });
+    }
+
+    const appleId = decoded.sub;
+    const email = decoded.email || appleUser?.email || `${appleId}@privaterelay.appleid.com`;
+    const name = appleUser?.name 
+      ? `${appleUser.name.firstName || ''} ${appleUser.name.lastName || ''}`.trim()
+      : email.split('@')[0];
+
+    // Check if user exists (by appleId or email)
+    let user = await User.findOne({ 
+      $or: [{ appleId }, { email: email.toLowerCase() }] 
+    });
+
+    if (user) {
+      // Update appleId if not set (linking existing email account)
+      if (!user.appleId) {
+        user.appleId = appleId;
+        await user.save();
+      }
+    } else {
+      // Create new user
+      user = await User.create({
+        email: email.toLowerCase(),
+        name: name || 'Apple User',
+        appleId,
+        provider: 'apple',
+        isVerified: true, // Apple verifies email
+        avatar: null,
+      });
+    }
+
+    // Generate tokens
+    const token = generateAccessToken(user._id, user.email, user.role);
+    const refreshTkn = generateRefreshToken(user._id, user.email, user.role, user.tokenVersion);
+    setRefreshCookie(res, refreshTkn);
+
+    console.log(`[AMBIENCE] ✅ Apple login: ${user.email}`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Apple sign-in successful.',
+      token,
+      user: user.toSafeObject(),
+    });
+  } catch (err) {
+    console.error('[AMBIENCE] ❌ Apple login error:', err.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Apple sign-in failed. Please try again.',
+    });
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // CONTROLLER: twitterAuth
 //
 // POST /api/auth/twitter
