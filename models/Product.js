@@ -116,6 +116,10 @@ const productSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    dynamicSpecs: [{
+      label: { type: String, trim: true },
+      value: { type: String, trim: true },
+    }],
     soldCount: {
       type: Number,
       default: 0,
