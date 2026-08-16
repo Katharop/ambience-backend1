@@ -21,7 +21,7 @@ const productSchema = new mongoose.Schema(
     category: {
       type: String,
       trim: true,
-      enum: ["men", "women", "electronics", "footwear", "accessories", "fragrances", "timepieces", "home", "sports", "other", "Men's Fashion", "Women's Fashion", "Electronics", "Footwear", "Fragrances", "Accessories", "Timepieces", "Home & Living", "Luxury Automotive", "Art & Collectibles"],
+      enum: ["men", "women", "electronics", "footwear", "accessories", "fragrances", "cosmetics", "timepieces", "home", "sports", "other", "Men's Fashion", "Women's Fashion", "Electronics", "Footwear", "Fragrances", "Cosmetics", "Accessories", "Timepieces", "Home & Living", "Luxury Automotive", "Art & Collectibles"],
     },
     subcategory: {
       type: String,
