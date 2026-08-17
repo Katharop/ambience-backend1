@@ -58,7 +58,7 @@ const cookieParser        = require("cookie-parser");
 const mongoSanitize       = require("express-mongo-sanitize");
 const hpp                 = require("hpp");
 const { threatDetection } = require("./middleware/threatDetection");
-const { sanitizeInputs }  = require("./middleware/sanitize");
+const { sanitizeInputs, enforceJSON }  = require("./middleware/sanitize");
 const { paymentGuard }    = require("./middleware/paymentGuard");
 
 const Product = require("./models/Product");
@@ -221,6 +221,9 @@ app.use(threatDetection);
 
 // ── Deep Input Sanitization (XSS + prototype pollution prevention) ──────────
 app.use(sanitizeInputs);
+
+// ── Content-Type Enforcement (blocks non-JSON mutation requests) ────────────
+app.use(enforceJSON);
 
 // ── Payment Data Guard (blocks raw financial data in requests) ──────────────
 app.use(paymentGuard);
@@ -497,7 +500,6 @@ app.get("/api/products/pending", protect, restrictTo("admin"), async (req, res) 
     return res.status(500).json({
       success: false,
       error: "Failed to fetch pending products",
-      details: process.env.NODE_ENV !== "production" ? error.message : undefined,
     });
   }
 });
@@ -577,6 +579,49 @@ app.delete("/api/products/:id", protect, requireAdmin, async (req, res) => {
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error deleting product:", error.message);
     return res.status(500).json({ success: false, error: "Failed to delete product" });
+  }
+});
+
+// ── Admin: Update product (PROTECTED — requires admin JWT) ───────────────────
+app.put("/api/products/:id", protect, requireAdmin, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, error: "Invalid product ID format" });
+    }
+
+    // SECURITY: Explicit field whitelist (prevents mass-assignment attacks)
+    const allowedFields = [
+      'name', 'brand', 'category', 'subcategory', 'description',
+      'retailPrice', 'dealPrice', 'imageUrl', 'additionalImages',
+      'modelUrl', 'has3DModel', 'sizeVariants', 'colorVariants',
+      'targetSection', 'tag', 'glyph', 'accent',
+      'hasARSupport', 'arModelUrl', 'arModelScale', 'arModelPosition',
+      'colorVariantModels',
+    ];
+    const updates = {};
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field];
+      }
+    }
+
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+    if (!product) {
+      return res.status(404).json({ success: false, error: "Product not found" });
+    }
+    console.log(`[AMBIENCE] ✅ Admin updated product: "${product.name}" by ${req.user?.email}`);
+    return res.status(200).json({ success: true, product, message: "Product updated successfully." });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error updating product:", error.message);
+    if (error.name === "ValidationError") {
+      const messages = Object.values(error.errors).map(e => e.message);
+      return res.status(400).json({ success: false, error: messages.join(". ") });
+    }
+    return res.status(500).json({ success: false, error: "Failed to update product" });
   }
 });
 
@@ -730,7 +775,7 @@ app.post("/api/products/create", protect, async (req, res) => {
       const messages = Object.values(error.errors).map(e => e.message);
       return res.status(400).json({ success: false, error: messages.join(". ") });
     }
-    return res.status(500).json({ success: false, error: error.message || "Failed to submit product" });
+    return res.status(500).json({ success: false, error: "Failed to submit product" });
   }
 });
 
@@ -786,7 +831,7 @@ app.delete("/api/products/:id/reject", protect, restrictTo("admin"), async (req,
 
     return res.status(200).json({
       success: true,
-      message: `Product "${productName}" rejected and removed.`,
+      message: "Product rejected and removed successfully.",
     });
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error rejecting product:", error.message);
@@ -807,7 +852,11 @@ app.get("/api/flagship", async (req, res) => {
 // ── Admin: Update flagship deal (PROTECTED) ────────────────────────────────
 app.put("/api/flagship", protect, requireAdmin, async (req, res) => {
   try {
-    const deal = await FlagshipDeal.findOneAndUpdate({}, req.body, { upsert: true, new: true });
+    const { title, subtitle, price, glyph, specs, imageUrl, modelUrl, isActive } = req.body;
+    const deal = await FlagshipDeal.findOneAndUpdate({}, 
+      { title, subtitle, price, glyph, specs, imageUrl, modelUrl, isActive, updatedAt: new Date() },
+      { upsert: true, new: true, runValidators: true }
+    );
     console.log(`[AMBIENCE] ✅ Flagship deal updated by ${req.user?.email}`);
     return res.status(200).json({ success: true, deal, message: "Flagship deal saved." });
   } catch (error) {
