@@ -534,8 +534,12 @@ app.post("/api/products", protect, requireAdmin, async (req, res) => {
       hasARSupport, arModelUrl, arModelScale, arModelPosition,
       // Color variant fields for 3D AR
       colorVariantModels,
-      // Advanced product features
-      subImages, specifications,
+      // Multi-image & gallery fields
+      imageUrls, subImages,
+      // Product detail fields
+      highlights, tags, spec, dynamicSpecs,
+      // Category-specific specifications
+      specifications,
     } = req.body;
 
     const product = new Product({
@@ -545,9 +549,18 @@ app.post("/api/products", protect, requireAdmin, async (req, res) => {
       targetSection, tag, glyph, accent,
       hasARSupport, arModelUrl, arModelScale, arModelPosition,
       colorVariantModels,
-      // Advanced product features (sanitized)
+      // Multi-image fields (sanitized)
+      imageUrls: Array.isArray(imageUrls) ? imageUrls.filter(u => typeof u === 'string' && u.trim()) : [],
       subImages: Array.isArray(subImages) ? subImages.filter(u => typeof u === 'string' && u.trim()) : [],
-      specifications: (specifications && typeof specifications === 'object' && !Array.isArray(specifications)) ? specifications : {},
+      // Product detail fields (sanitized)
+      highlights: Array.isArray(highlights) ? highlights.filter(h => typeof h === 'string' && h.trim()) : [],
+      tags: Array.isArray(tags) ? tags.filter(t => typeof t === 'string' && t.trim()) : [],
+      spec: typeof spec === 'string' ? spec.trim() : '',
+      dynamicSpecs: Array.isArray(dynamicSpecs) ? dynamicSpecs.filter(ds => ds && typeof ds === 'object' && ds.label && ds.value) : [],
+      // Category specifications — must be a plain object for Mongoose Map
+      specifications: (specifications && typeof specifications === 'object' && !Array.isArray(specifications))
+        ? Object.fromEntries(Object.entries(specifications).filter(([k, v]) => typeof k === 'string' && k.trim() && typeof v === 'string' && v.trim()))
+        : {},
       // SECURITY: Force these fields — cannot be set by the request
       status: "live",
       isApproved: true,
@@ -560,12 +573,13 @@ app.post("/api/products", protect, requireAdmin, async (req, res) => {
     console.log(`[AMBIENCE] ✅ Admin product created: "${product.name}" by ${req.user?.email}`);
     return res.status(201).json({ success: true, product, message: "Product deployed successfully." });
   } catch (error) {
-    console.error("[AMBIENCE] ❌ Error creating product:", error.message);
-    if (error.name === "ValidationError") {
+    console.error("[AMBIENCE] ❌ Error creating product:", error.name, error.message);
+    if (error.name === "ValidationError" && error.errors) {
       const messages = Object.values(error.errors).map(e => e.message);
       return res.status(400).json({ success: false, error: messages.join(". ") });
     }
-    return res.status(500).json({ success: false, error: "Failed to create product" });
+    // CastError, ValidationError without .errors, or any other Mongoose error
+    return res.status(400).json({ success: false, error: error.message || "Failed to create product" });
   }
 });
 
@@ -602,13 +616,25 @@ app.put("/api/products/:id", protect, requireAdmin, async (req, res) => {
       'targetSection', 'tag', 'glyph', 'accent',
       'hasARSupport', 'arModelUrl', 'arModelScale', 'arModelPosition',
       'colorVariantModels',
-      // Advanced product features
-      'subImages', 'specifications',
+      // Multi-image & gallery fields
+      'imageUrls', 'subImages',
+      // Product detail fields
+      'highlights', 'tags', 'spec', 'dynamicSpecs',
+      // Category-specific specifications
+      'specifications',
     ];
     const updates = {};
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
-        updates[field] = req.body[field];
+        // Extra sanitization for specifications (must be clean object for Map)
+        if (field === 'specifications') {
+          const raw = req.body[field];
+          updates[field] = (raw && typeof raw === 'object' && !Array.isArray(raw))
+            ? Object.fromEntries(Object.entries(raw).filter(([k, v]) => typeof k === 'string' && k.trim() && typeof v === 'string' && v.trim()))
+            : {};
+        } else {
+          updates[field] = req.body[field];
+        }
       }
     }
 
@@ -623,12 +649,12 @@ app.put("/api/products/:id", protect, requireAdmin, async (req, res) => {
     console.log(`[AMBIENCE] ✅ Admin updated product: "${product.name}" by ${req.user?.email}`);
     return res.status(200).json({ success: true, product, message: "Product updated successfully." });
   } catch (error) {
-    console.error("[AMBIENCE] ❌ Error updating product:", error.message);
-    if (error.name === "ValidationError") {
+    console.error("[AMBIENCE] ❌ Error updating product:", error.name, error.message);
+    if (error.name === "ValidationError" && error.errors) {
       const messages = Object.values(error.errors).map(e => e.message);
       return res.status(400).json({ success: false, error: messages.join(". ") });
     }
-    return res.status(500).json({ success: false, error: "Failed to update product" });
+    return res.status(400).json({ success: false, error: error.message || "Failed to update product" });
   }
 });
 
