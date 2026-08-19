@@ -75,6 +75,16 @@ const productSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    subImages: {
+      type: [String],
+      default: [],
+      validate: [arr => arr.length <= 8, 'Maximum 8 sub-images allowed'],
+    },
+    specifications: {
+      type: Map,
+      of: String,
+      default: () => new Map(),
+    },
     modelUrl: {
       type: String,
     },

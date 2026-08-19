@@ -534,6 +534,8 @@ app.post("/api/products", protect, requireAdmin, async (req, res) => {
       hasARSupport, arModelUrl, arModelScale, arModelPosition,
       // Color variant fields for 3D AR
       colorVariantModels,
+      // Advanced product features
+      subImages, specifications,
     } = req.body;
 
     const product = new Product({
@@ -543,6 +545,9 @@ app.post("/api/products", protect, requireAdmin, async (req, res) => {
       targetSection, tag, glyph, accent,
       hasARSupport, arModelUrl, arModelScale, arModelPosition,
       colorVariantModels,
+      // Advanced product features (sanitized)
+      subImages: Array.isArray(subImages) ? subImages.filter(u => typeof u === 'string' && u.trim()) : [],
+      specifications: (specifications && typeof specifications === 'object' && !Array.isArray(specifications)) ? specifications : {},
       // SECURITY: Force these fields — cannot be set by the request
       status: "live",
       isApproved: true,
@@ -597,6 +602,8 @@ app.put("/api/products/:id", protect, requireAdmin, async (req, res) => {
       'targetSection', 'tag', 'glyph', 'accent',
       'hasARSupport', 'arModelUrl', 'arModelScale', 'arModelPosition',
       'colorVariantModels',
+      // Advanced product features
+      'subImages', 'specifications',
     ];
     const updates = {};
     for (const field of allowedFields) {
