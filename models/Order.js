@@ -176,6 +176,14 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    invoiceNumber: { type: String, unique: true, sparse: true },
+    invoiceDate: { type: Date },
+    deliveryLocation: {
+      lat: { type: Number },
+      lng: { type: Number },
+      formattedAddress: { type: String, default: '' }
+    },
+
     // ── Metadata ──────────────────────────────────────────────────────────
     paidAt: {
       type: Date,
@@ -188,6 +196,17 @@ const orderSchema = new mongoose.Schema(
     toObject: { virtuals: true },
   }
 );
+
+// ── Pre-save Hook: Auto-generate invoiceNumber ──────────────────────────────
+orderSchema.pre('save', function (next) {
+  if (this.isModified('paymentStatus') && this.paymentStatus === 'Success' && !this.invoiceNumber) {
+    const d = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const rand = Math.random().toString(36).substring(2, 7).toUpperCase();
+    this.invoiceNumber = `AMB-${d}-${rand}`;
+    this.invoiceDate = new Date();
+  }
+  next();
+});
 
 // ── Virtual: itemCount ──────────────────────────────────────────────────────
 orderSchema.virtual("itemCount").get(function () {

@@ -63,6 +63,7 @@ const { paymentGuard }    = require("./middleware/paymentGuard");
 
 const Product = require("./models/Product");
 const FlagshipDeal = require("./models/FlagshipDeal");
+const Order = require("./models/Order");
 
 // ── Email templates ─────────────────────────────────────────────────────────
 const { generatePhotoFeedbackEmail } = require("./photo-feedback-template");
@@ -695,6 +696,35 @@ app.get("/api/products/my-submissions", protect, async (req, res) => {
   }
 });
 
+// ── User: Update their submission ───────────────────────────────────────────
+app.put('/api/products/my-submissions/:id', protect, async (req, res) => {
+  try {
+    const mongoId = req.user?._id?.toString();
+    const uuidId = req.user?.userId;
+    const email = req.user?.email;
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ success: false, error: 'Product not found' });
+    const isOwner = [mongoId, uuidId, email].filter(Boolean).includes(product.submittedBy);
+    if (!isOwner) return res.status(403).json({ success: false, error: 'Not authorized to edit this product' });
+    if (!['pending', 'live'].includes(product.status)) return res.status(400).json({ success: false, error: 'Cannot edit archived or rejected products' });
+    const allowed = ['name', 'description', 'retailPrice', 'dealPrice', 'category', 'subcategory', 'imageUrl', 'modelUrl', 'sizeVariants', 'colorVariants'];
+    for (const f of allowed) {
+      if (req.body[f] !== undefined) {
+        if (f === 'retailPrice' || f === 'dealPrice') { const v = parseFloat(req.body[f]); if (!isNaN(v) && v > 0) product[f] = v; }
+        else product[f] = req.body[f];
+      }
+    }
+    if (req.body.retailPrice && !req.body.dealPrice) product.dealPrice = parseFloat(req.body.retailPrice);
+    await product.save();
+    console.log(`[AMBIENCE] ✅ Creator updated: "${product.name}" by ${email}`);
+    return res.status(200).json({ success: true, product, message: 'Product updated successfully' });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error updating creator product:', error.message);
+    if (error.name === 'ValidationError') { return res.status(400).json({ success: false, error: Object.values(error.errors).map(e => e.message).join('. ') }); }
+    return res.status(500).json({ success: false, error: 'Failed to update product' });
+  }
+});
+
 // ── User: Archive/Cancel their submission ───────────────────────────────────
 app.delete("/api/products/my-submissions/:id", protect, async (req, res) => {
   try {
@@ -980,6 +1010,107 @@ app.get("/api/health", (req, res) => {
     smtp: isEmailConfigured() ? "configured" : "dev-mode",
     timestamp: new Date().toISOString(),
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NEW ROUTES: Admin Stats, Orders & Invoice
+// ═══════════════════════════════════════════════════════════════════════════════
+app.get('/api/admin/stats', protect, requireAdmin, async (req, res) => {
+  try {
+    const revenueResult = await Order.aggregate([
+      { $match: { paymentStatus: 'Success' } },
+      { $group: { _id: null, totalRevenue: { $sum: '$totalAmount' }, orderCount: { $sum: 1 } } }
+    ]);
+    const totalRevenue = revenueResult[0]?.totalRevenue || 0;
+    const totalOrders = revenueResult[0]?.orderCount || 0;
+    const liveProducts = await Product.countDocuments({ status: 'live' });
+    const pendingProducts = await Product.countDocuments({ status: 'pending' });
+    const totalProducts = await Product.countDocuments({});
+    const ordersByStatus = await Order.aggregate([
+      { $group: { _id: '$orderStatus', count: { $sum: 1 } } }
+    ]);
+    const recentOrders = await Order.find().sort({ createdAt: -1 }).limit(20)
+      .select('orderId userEmail items amount totalAmount orderStatus paymentStatus shippingAddress createdAt invoiceNumber');
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now - 30*24*60*60*1000);
+    const sixtyDaysAgo = new Date(now - 60*24*60*60*1000);
+    const recentProds = await Product.countDocuments({ createdAt: { $gte: thirtyDaysAgo }, status: 'live' });
+    const prevProds = await Product.countDocuments({ createdAt: { $gte: sixtyDaysAgo, $lt: thirtyDaysAgo }, status: 'live' });
+    const productGrowth = prevProds > 0 ? ((recentProds - prevProds) / prevProds * 100).toFixed(1) : recentProds > 0 ? '100.0' : '0.0';
+    console.log(`[AMBIENCE] ✅ Admin stats fetched by ${req.user?.email}`);
+    return res.status(200).json({ success: true, stats: { totalRevenue, totalOrders, liveProducts, pendingProducts, totalProducts, productGrowth, ordersByStatus: ordersByStatus.reduce((a, i) => { a[i._id] = i.count; return a; }, {}), recentOrders } });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error fetching admin stats:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch admin stats' });
+  }
+});
+
+app.get('/api/admin/orders', protect, requireAdmin, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const status = req.query.status;
+    const skip = (page - 1) * limit;
+    const filter = {};
+    if (status) filter.orderStatus = status;
+    const [orders, total] = await Promise.all([
+      Order.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).populate('user', 'name email phone'),
+      Order.countDocuments(filter)
+    ]);
+    console.log(`[AMBIENCE] ✅ Admin fetched ${orders.length} orders (page ${page})`);
+    return res.status(200).json({ success: true, orders, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error fetching admin orders:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch orders' });
+  }
+});
+
+app.put('/api/admin/orders/:id/status', protect, requireAdmin, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const valid = ['Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
+    if (!valid.includes(status)) return res.status(400).json({ success: false, error: `Invalid status. Must be: ${valid.join(', ')}` });
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+    order.orderStatus = status;
+    await order.save();
+    console.log(`[AMBIENCE] ✅ Order ${order.orderId} status → ${status} by ${req.user?.email}`);
+    return res.status(200).json({ success: true, order, message: `Order status updated to ${status}` });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error updating order status:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to update order status' });
+  }
+});
+
+app.get('/api/orders/:orderId/invoice', protect, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.orderId).populate('user', 'name email phone');
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+    const isOwner = order.user?._id?.toString() === req.user?._id?.toString();
+    const isAdmin = req.user?.role === 'admin';
+    if (!isOwner && !isAdmin) return res.status(403).json({ success: false, error: 'Not authorized' });
+    if (!order.invoiceNumber && order.paymentStatus === 'Success') {
+      const d = new Date().toISOString().slice(0,10).replace(/-/g,'');
+      order.invoiceNumber = `AMB-${d}-${Math.random().toString(36).substring(2,7).toUpperCase()}`;
+      order.invoiceDate = new Date();
+      await order.save();
+    }
+    const invoice = {
+      invoiceNumber: order.invoiceNumber || 'PENDING',
+      invoiceDate: order.invoiceDate || order.paidAt || order.createdAt,
+      orderId: order.orderId,
+      customer: { name: order.user?.name || 'Customer', email: order.userEmail || order.user?.email || '', phone: order.user?.phone || '' },
+      items: order.items.map(i => ({ name: i.name, brand: i.brand || '', category: i.category || '', qty: i.qty, price: i.priceINR, total: i.priceINR * i.qty })),
+      subtotal: order.amount, tax: order.taxAmount, total: order.totalAmount,
+      currency: order.currency || 'INR', paymentMethod: 'Razorpay', paymentId: order.razorpay_payment_id || '',
+      shippingAddress: order.shippingAddress, orderStatus: order.orderStatus, paymentStatus: order.paymentStatus
+    };
+    console.log(`[AMBIENCE] ✅ Invoice ${invoice.invoiceNumber} fetched`);
+    return res.status(200).json({ success: true, invoice });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error generating invoice:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to generate invoice' });
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
