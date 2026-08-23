@@ -781,9 +781,13 @@ app.post("/api/products/create", protect, async (req, res) => {
     // ── Parse size/color variants (accept arrays or comma-separated strings) ──
     let parsedSizes = [];
     if (Array.isArray(sizeVariants)) {
-      parsedSizes = sizeVariants.map(s => s.trim()).filter(Boolean);
+      parsedSizes = sizeVariants.map(s => {
+        if (typeof s === 'string') return { label: s.trim(), priceDelta: 0 };
+        if (s && typeof s === 'object' && s.label) return { label: String(s.label).trim(), priceDelta: Number(s.priceDelta) || 0 };
+        return null;
+      }).filter(Boolean);
     } else if (typeof sizeVariants === "string" && sizeVariants.trim()) {
-      parsedSizes = sizeVariants.split(",").map(s => s.trim()).filter(Boolean);
+      parsedSizes = sizeVariants.split(",").map(s => ({ label: s.trim(), priceDelta: 0 })).filter(s => s.label);
     }
 
     let parsedColors = [];

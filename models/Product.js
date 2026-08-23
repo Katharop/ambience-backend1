@@ -47,11 +47,12 @@ const productSchema = new mongoose.Schema(
       hex: { type: String, required: true },
       imageUrl: { type: String, default: '' },
       modelUrl: { type: String, default: '' },
+      priceDelta: { type: Number, default: 0 },
     }],
-    sizeVariants: {
-      type: [String],
-      default: [],
-    },
+    sizeVariants: [{
+      label: { type: String, required: true },
+      priceDelta: { type: Number, default: 0 },
+    }],
     tags: {
       type: [String],
       default: [],
