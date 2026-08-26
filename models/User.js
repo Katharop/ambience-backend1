@@ -170,6 +170,14 @@ const userSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    proSubscription: {
+      isActive:      { type: Boolean, default: false },
+      plan:          { type: String, enum: ['monthly'], default: 'monthly' },
+      priceINR:      { type: Number, default: 4999 },
+      subscribedAt:  { type: Date, default: null },
+      expiresAt:     { type: Date, default: null },
+      razorpaySubId: { type: String, default: null },
+    },
   },
   {
     timestamps: true,
@@ -190,6 +198,15 @@ userSchema.virtual("initial").get(function () {
 userSchema.virtual("displayName").get(function () {
   if (this.name) return this.name;
   return this.email ? this.email.split("@")[0] : "User";
+});
+
+// ── Virtual: isProMember ────────────────────────────────────────────────────
+userSchema.virtual('isProMember').get(function () {
+  return (
+    this.proSubscription?.isActive === true &&
+    this.proSubscription?.expiresAt &&
+    new Date(this.proSubscription.expiresAt) > new Date()
+  );
 });
 
 // ── Pre-save Hook: Hash password ────────────────────────────────────────────
@@ -248,6 +265,8 @@ userSchema.methods.toSafeObject = function () {
     provider: this.provider,
     initial: this.initial,
     displayName: this.displayName,
+    proSubscription: this.proSubscription,
+    isProMember: this.isProMember,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };

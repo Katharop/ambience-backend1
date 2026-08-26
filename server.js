@@ -505,6 +505,17 @@ app.get("/api/products/pending", protect, restrictTo("admin"), async (req, res) 
   }
 });
 
+// ─── Deals Verification Queue ──────────────────────────────────────────────
+app.get('/api/products/pending-deals', protect, restrictTo('admin'), async (req, res) => {
+  try {
+    const deals = await Product.find({ status: 'pending_deals_approval' }).sort({ createdAt: -1 });
+    res.json(deals);
+  } catch (err) {
+    console.error('[Deals Queue]', err);
+    res.status(500).json({ message: 'Failed to fetch deals queue' });
+  }
+});
+
 app.get("/api/products/:id", async (req, res) => {
   try {
     // ── Validate ObjectId to prevent Mongoose CastError ────────────────────
@@ -800,6 +811,22 @@ app.post("/api/products/create", protect, async (req, res) => {
       parsedColors = colorVariants.split(",").map(s => ({ name: s.trim(), hex: '#000000' })).filter(Boolean);
     }
 
+    let targetSection = "category_only";
+    let status = "pending";
+
+    if (category === 'Deals Page') {
+      const User = require('./models/User');
+      const creator = await User.findById(req.user._id);
+      if (!creator?.proSubscription?.isActive || new Date(creator.proSubscription.expiresAt) <= new Date()) {
+        return res.status(403).json({ success: false, error: 'Pro Plan subscription is required to submit to Deals Page.' });
+      }
+      if (priceVal < 100000) {
+        return res.status(400).json({ success: false, error: 'Deals Page products must have a price of at least 1,00,000 INR.' });
+      }
+      targetSection = "deals_luxury";
+      status = "pending_deals_approval";
+    }
+
     const product = new Product({
       name: name.trim(),
       brand: "Community Creator",
@@ -813,8 +840,8 @@ app.post("/api/products/create", protect, async (req, res) => {
       has3DModel: hasARSupport === "true" || hasARSupport === true,
       sizeVariants: parsedSizes,
       colorVariants: parsedColors,
-      targetSection: "category_only", // Strict enforcement: Exclude from Home, Deals, Trending
-      status: "pending",
+      targetSection: targetSection,
+      status: status,
       isApproved: false,
       isOfficial: false,
       submittedBy: req.user?._id?.toString() || req.user?.userId || "unknown",
@@ -906,6 +933,26 @@ app.delete("/api/products/:id/reject", protect, restrictTo("admin"), async (req,
   }
 });
 
+app.put('/api/products/:id/approve-deals', protect, restrictTo('admin'), async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+    if (product.status !== 'pending_deals_approval') {
+      return res.status(400).json({ message: 'Product is not pending deals approval' });
+    }
+
+    product.status = 'live';
+    product.isApproved = true;
+    product.targetSection = 'deals_luxury';
+    await product.save();
+
+    res.json({ message: 'Product approved to Deals Vault', product });
+  } catch (err) {
+    console.error('[Deals Approve]', err);
+    res.status(500).json({ message: 'Failed to approve deals product' });
+  }
+});
+
 app.get("/api/flagship", async (req, res) => {
   try {
     const deal = await FlagshipDeal.findOne();
@@ -929,6 +976,51 @@ app.put("/api/flagship", protect, requireAdmin, async (req, res) => {
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error upserting flagship deal:", error.message);
     return res.status(500).json({ success: false, error: "Failed to save flagship deal" });
+  }
+});
+
+// ─── Pro Plan Subscription ─────────────────────────────────────────────────
+app.post('/api/subscription/pro/activate', protect, async (req, res) => {
+  try {
+    const User = require('./models/User');
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const now = new Date();
+    user.proSubscription = {
+      isActive: true,
+      plan: 'monthly',
+      priceINR: 4999,
+      subscribedAt: now,
+      expiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+      razorpaySubId: req.body.razorpaySubId || null,
+    };
+    await user.save({ validateBeforeSave: false });
+
+    res.json({
+      message: 'Pro Plan activated successfully',
+      proSubscription: user.proSubscription,
+      isProMember: user.isProMember,
+    });
+  } catch (err) {
+    console.error('[Pro Activate]', err);
+    res.status(500).json({ message: 'Failed to activate Pro Plan' });
+  }
+});
+
+app.get('/api/subscription/pro/status', protect, async (req, res) => {
+  try {
+    const User = require('./models/User');
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    res.json({
+      proSubscription: user.proSubscription,
+      isProMember: user.isProMember,
+    });
+  } catch (err) {
+    console.error('[Pro Status]', err);
+    res.status(500).json({ message: 'Failed to fetch Pro status' });
   }
 });
 

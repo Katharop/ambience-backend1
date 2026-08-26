@@ -99,7 +99,7 @@ const productSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["live", "draft", "archived", "pending"],
+      enum: ["live", "draft", "archived", "pending", "pending_deals_approval"],
       default: "live",
     },
     addedBy: {
