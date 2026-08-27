@@ -476,6 +476,29 @@ app.get("/api/orders/my-orders",      protect, paymentController.getMyOrders);
 
 app.get("/api/products", async (req, res) => {
   try {
+    // ── Admin bypass: ?admin=true returns ALL products (including Deals Page) ──
+    // This prevents the "vanishing product" bug where Deals Page products
+    // disappeared from the Admin Panel's product list.
+    if (req.query.admin === 'true') {
+      // Verify the requester is actually an admin via JWT
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+          const token = authHeader.split(' ')[1];
+          const jwt = require('jsonwebtoken');
+          const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
+          const User = require('./models/User');
+          const dbUser = await User.findById(decoded.id).select('role');
+          if (dbUser && dbUser.role === 'admin') {
+            const allProducts = await Product.find({ status: 'live' }).sort({ createdAt: -1 });
+            return res.status(200).json({ success: true, products: allProducts });
+          }
+        } catch (_jwtErr) {
+          // JWT verification failed — fall through to public filter
+        }
+      }
+    }
+
     // SECURITY: Strictly exclude Deals Page products and pending deals from the
     // public shop feed. Deals products belong exclusively in the Deals Vault.
     const products = await Product.find({
@@ -510,14 +533,32 @@ app.get("/api/products/pending", protect, restrictTo("admin"), async (req, res) 
   }
 });
 
+// ─── Deals Live Products (PUBLIC) — For the Deals Page frontend ────────────
+// Returns approved Deals Page products (category: 'Deals Page', status: 'live').
+// This endpoint solves the double-blind filter issue where GET /api/products
+// excluded Deals Page products, making approved deals invisible on the Deals Page.
+app.get('/api/products/deals-live', async (req, res) => {
+  try {
+    const dealsProducts = await Product.find({
+      status: 'live',
+      category: { $in: ['Deals Page', 'deals page'] },
+      isApproved: true,
+    }).sort({ createdAt: -1 });
+    return res.status(200).json({ success: true, products: dealsProducts });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error fetching deals-live products:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch deals products' });
+  }
+});
+
 // ─── Deals Verification Queue ──────────────────────────────────────────────
 app.get('/api/products/pending-deals', protect, restrictTo('admin'), async (req, res) => {
   try {
     const deals = await Product.find({ status: 'pending_deals_approval' }).sort({ createdAt: -1 });
-    res.json(deals);
+    res.json({ success: true, deals });
   } catch (err) {
     console.error('[Deals Queue]', err);
-    res.status(500).json({ message: 'Failed to fetch deals queue' });
+    res.status(500).json({ success: false, message: 'Failed to fetch deals queue' });
   }
 });
 
@@ -976,20 +1017,22 @@ app.delete("/api/products/:id/reject", protect, restrictTo("admin"), async (req,
 app.put('/api/products/:id/approve-deals', protect, restrictTo('admin'), async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
-    if (!product) return res.status(404).json({ message: 'Product not found' });
+    if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
     if (product.status !== 'pending_deals_approval') {
-      return res.status(400).json({ message: 'Product is not pending deals approval' });
+      return res.status(400).json({ success: false, message: 'Product is not pending deals approval' });
     }
 
+    // Approve: set live status while keeping category as 'Deals Page'
     product.status = 'live';
     product.isApproved = true;
     product.targetSection = 'deals_luxury';
     await product.save();
 
-    res.json({ message: 'Product approved to Deals Vault', product });
+    console.log(`[AMBIENCE] 👑 Deals product approved: "${product.name}" → Royal Vault`);
+    res.json({ success: true, message: 'Product approved to Deals Vault', product });
   } catch (err) {
     console.error('[Deals Approve]', err);
-    res.status(500).json({ message: 'Failed to approve deals product' });
+    res.status(500).json({ success: false, message: 'Failed to approve deals product' });
   }
 });
 
