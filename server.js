@@ -476,7 +476,12 @@ app.get("/api/orders/my-orders",      protect, paymentController.getMyOrders);
 
 app.get("/api/products", async (req, res) => {
   try {
-    const products = await Product.find({ status: "live" }).sort({ createdAt: -1 });
+    // SECURITY: Strictly exclude Deals Page products and pending deals from the
+    // public shop feed. Deals products belong exclusively in the Deals Vault.
+    const products = await Product.find({
+      status: "live",
+      category: { $nin: ["Deals Page", "deals page"] },
+    }).sort({ createdAt: -1 });
     return res.status(200).json({ success: true, products });
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error fetching products:", error.message);
@@ -756,6 +761,41 @@ app.delete("/api/products/my-submissions/:id", protect, async (req, res) => {
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error archiving product:", error.message);
     return res.status(500).json({ success: false, error: "Failed to archive product" });
+  }
+});
+
+// ── User: Get their Deals Page submission stats ─────────────────────────────
+// Returns analytics for the creator's Deals Page submissions only.
+app.get("/api/products/my-deals-stats", protect, async (req, res) => {
+  try {
+    const mongoId = req.user?._id?.toString();
+    const uuidId = req.user?.userId;
+    const email = req.user?.email;
+    if (!mongoId && !uuidId) return res.status(401).json({ success: false, error: "Unauthorized" });
+
+    const orConditions = [];
+    if (mongoId) orConditions.push({ submittedBy: mongoId });
+    if (uuidId)  orConditions.push({ submittedBy: uuidId });
+    if (email)   orConditions.push({ submittedBy: email });
+
+    // Only count products submitted to the Deals Page category
+    const dealsProducts = await Product.find({
+      $or: orConditions,
+      source: "creator_hub",
+      category: { $in: ["Deals Page", "deals page"] },
+    });
+
+    const totalDeals     = dealsProducts.length;
+    const pendingDeals   = dealsProducts.filter(p => p.status === "pending_deals_approval").length;
+    const approvedDeals  = dealsProducts.filter(p => p.status === "live" && p.isApproved === true).length;
+
+    return res.status(200).json({
+      success: true,
+      stats: { totalDeals, pendingDeals, approvedDeals },
+    });
+  } catch (error) {
+    console.error("[AMBIENCE] ❌ Error fetching deals stats:", error.message);
+    return res.status(500).json({ success: false, error: "Failed to fetch deals stats" });
   }
 });
 
