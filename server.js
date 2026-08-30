@@ -844,9 +844,11 @@ app.get("/api/products/my-deals-stats", protect, async (req, res) => {
 app.post("/api/products/create", protect, async (req, res) => {
   try {
     const {
-      name, price, category, subcategory, description, imageUrl,
+      name, price, brand, category, subcategory, description, imageUrl,
+      retailPrice: reqRetailPrice, dealPrice: reqDealPrice,
       isOfficial, submittedBy, source, hasARSupport, modelUrl,
       sizeVariants, colorVariants,
+      highlights, specifications, dynamicSpecs, subImages,
     } = req.body;
 
     // ── Validation ──
@@ -892,6 +894,30 @@ app.post("/api/products/create", protect, async (req, res) => {
       parsedColors = colorVariants.split(",").map(s => ({ name: s.trim(), hex: '#000000' })).filter(Boolean);
     }
 
+    // ── Parse highlights ──
+    const parsedHighlights = Array.isArray(highlights)
+      ? highlights.filter(h => typeof h === 'string' && h.trim()).map(h => h.trim())
+      : [];
+
+    // ── Parse dynamicSpecs ──
+    const parsedDynamicSpecs = Array.isArray(dynamicSpecs)
+      ? dynamicSpecs.filter(ds => ds && typeof ds === 'object' && ds.label?.trim() && ds.value?.trim())
+      : [];
+
+    // ── Parse specifications (key-value map) ──
+    const parsedSpecifications = (specifications && typeof specifications === 'object' && !Array.isArray(specifications))
+      ? Object.fromEntries(Object.entries(specifications).filter(([k, v]) => typeof k === 'string' && k.trim() && typeof v === 'string' && v.trim()))
+      : {};
+
+    // ── Parse subImages ──
+    const parsedSubImages = Array.isArray(subImages)
+      ? subImages.filter(u => typeof u === 'string' && u.trim())
+      : [];
+
+    // ── Compute prices ──
+    const finalRetailPrice = parseFloat(reqRetailPrice) || priceVal;
+    const finalDealPrice = parseFloat(reqDealPrice) || priceVal;
+
     let targetSection = "category_only";
     let status = "pending";
 
@@ -910,13 +936,17 @@ app.post("/api/products/create", protect, async (req, res) => {
 
     const product = new Product({
       name: name.trim(),
-      brand: "Community Creator",
+      brand: (brand && brand.trim()) || "Community Creator",
       category: category.trim(),
       subcategory: subcategory.trim(),
-      retailPrice: priceVal,
-      dealPrice: priceVal,
+      retailPrice: finalRetailPrice,
+      dealPrice: finalDealPrice,
       description: description.trim(),
+      highlights: parsedHighlights,
+      dynamicSpecs: parsedDynamicSpecs,
+      specifications: parsedSpecifications,
       imageUrl: imageUrl.trim(),
+      subImages: parsedSubImages,
       modelUrl: modelUrl || "",
       has3DModel: hasARSupport === "true" || hasARSupport === true,
       sizeVariants: parsedSizes,
