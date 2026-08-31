@@ -958,7 +958,8 @@ app.post("/api/products/create", protect, async (req, res) => {
       submittedBy: req.user?._id?.toString() || req.user?.userId || "unknown",
       source: source || "creator_hub",
       addedBy: req.user?.email || "creator",
-      tag: "CREATOR",
+      tags: req.body.tags || [],
+      tag: req.body.tag || "CREATOR",
       glyph: "🎨",
       accent: "#a78bfa",
     });

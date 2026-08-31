@@ -54,7 +54,7 @@ const productSchema = new mongoose.Schema(
       priceDelta: { type: Number, default: 0 },
     }],
     tags: {
-      type: [String],
+      type: mongoose.Schema.Types.Mixed,
       default: [],
     },
     tag: {
