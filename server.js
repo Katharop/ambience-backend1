@@ -612,7 +612,7 @@ app.post("/api/products", protect, requireAdmin, async (req, res) => {
       subImages: Array.isArray(subImages) ? subImages.filter(u => typeof u === 'string' && u.trim()) : [],
       // Product detail fields (sanitized)
       highlights: Array.isArray(highlights) ? highlights.filter(h => typeof h === 'string' && h.trim()) : [],
-      tags: Array.isArray(tags) ? tags.filter(t => typeof t === 'string' && t.trim()) : [],
+      tags: Array.isArray(tags) ? tags.filter(t => t && (typeof t === 'string' ? t.trim() : typeof t === 'object')) : [],
       spec: typeof spec === 'string' ? spec.trim() : '',
       dynamicSpecs: Array.isArray(dynamicSpecs) ? dynamicSpecs.filter(ds => ds && typeof ds === 'object' && ds.label && ds.value) : [],
       // Category specifications — must be a plain object for Mongoose Map
