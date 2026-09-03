@@ -58,8 +58,8 @@ const productSchema = new mongoose.Schema(
       default: [],
     },
     tag: {
-      type: String,
-      trim: true,
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
     },
     glyph: {
       type: String,
