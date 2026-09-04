@@ -54,6 +54,11 @@ const orderItemSchema = new mongoose.Schema(
       min: 1,
       default: 1,
     },
+    imageUrl: {
+      type: String,
+      trim: true,
+      default: "",
+    },
   },
   { _id: false }
 );
@@ -164,7 +169,7 @@ const orderSchema = new mongoose.Schema(
     orderStatus: {
       type: String,
       enum: {
-        values: ["Confirmed", "Processing", "Shipped", "Delivered", "Cancelled"],
+        values: ["Confirmed", "Processing", "Shipped", "Out for Delivery", "Delivered", "Cancelled"],
         message: "{VALUE} is not a valid order status",
       },
       default: "Confirmed",

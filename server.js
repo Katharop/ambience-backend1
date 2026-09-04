@@ -672,6 +672,21 @@ app.put("/api/admin/support-tickets/:id/status", protect, requireAdmin, async (r
   }
 });
 
+// ── Admin: Delete Support Ticket ────────────────────────────────────────────
+app.delete("/api/admin/support-tickets/:id", protect, requireAdmin, async (req, res) => {
+  try {
+    const ticket = await SupportTicket.findByIdAndDelete(req.params.id);
+    if (!ticket) {
+      return res.status(404).json({ success: false, error: "Ticket not found" });
+    }
+    console.log(`[AMBIENCE] 🗑️ Ticket ${ticket._id} deleted by admin`);
+    res.json({ success: true, message: "Ticket deleted" });
+  } catch (err) {
+    console.error("[Admin Delete Ticket]", err.message);
+    res.status(500).json({ success: false, error: "Failed to delete ticket" });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 4.3: Payment Routes — Razorpay Integration
 //
@@ -1496,7 +1511,7 @@ app.get('/api/admin/orders', protect, requireAdmin, async (req, res) => {
 app.put('/api/admin/orders/:id/status', protect, requireAdmin, async (req, res) => {
   try {
     const { status } = req.body;
-    const valid = ['Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
+    const valid = ['Confirmed', 'Processing', 'Shipped', 'Out for Delivery', 'Delivered', 'Cancelled'];
     if (!valid.includes(status)) return res.status(400).json({ success: false, error: `Invalid status. Must be: ${valid.join(', ')}` });
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ success: false, error: 'Order not found' });

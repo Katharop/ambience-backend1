@@ -151,6 +151,7 @@ const createOrder = async (req, res) => {
         category: item.category || "",
         priceINR: item.priceINR,
         qty: item.qty,
+        imageUrl: item.imageUrl || item.image || "",
       })),
       amount: amountPaise,
       taxAmount: taxPaise,
