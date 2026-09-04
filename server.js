@@ -64,6 +64,8 @@ const { paymentGuard }    = require("./middleware/paymentGuard");
 const Product = require("./models/Product");
 const FlagshipDeal = require("./models/FlagshipDeal");
 const Order = require("./models/Order");
+const User = require("./models/User");
+const SupportTicket = require("./models/SupportTicket");
 
 // ── Email templates ─────────────────────────────────────────────────────────
 const { generatePhotoFeedbackEmail } = require("./photo-feedback-template");
@@ -451,6 +453,222 @@ app.delete("/api/users/addresses/:addressId", protect, async (req, res) => {
   } catch (err) {
     console.error("[AMBIENCE] ❌ Delete address error:", err.message);
     return res.status(500).json({ success: false, error: "Failed to delete address." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STEP 4.2b: Account Settings Routes
+// Password change, notification preferences, 2FA, support tickets
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Change Password (logged-in user) ────────────────────────────────────────
+app.put("/api/auth/change-password", protect, async (req, res) => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({ success: false, error: "All password fields are required" });
+    }
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, error: "New password and confirmation do not match" });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ success: false, error: "New password must be at least 8 characters" });
+    }
+    if (currentPassword === newPassword) {
+      return res.status(400).json({ success: false, error: "New password must differ from current password" });
+    }
+
+    const user = await User.findById(req.user._id).select("+password");
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    // Verify current password
+    const isMatch = await user.matchPassword(currentPassword);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, error: "Current password is incorrect" });
+    }
+
+    // Set new password — pre-save hook handles hashing + complexity validation
+    user.password = newPassword;
+    await user.save();
+
+    console.log(`[AMBIENCE] ✅ Password changed for ${user.email}`);
+    res.json({ success: true, message: "Password updated successfully" });
+  } catch (err) {
+    console.error("[Change Password]", err.message);
+    if (err.name === "ValidationError") {
+      return res.status(400).json({ success: false, error: err.message });
+    }
+    res.status(500).json({ success: false, error: "Failed to update password" });
+  }
+});
+
+// ── Update Notification Preferences ─────────────────────────────────────────
+app.put("/api/users/notifications", protect, async (req, res) => {
+  try {
+    const allowed = ["email", "push", "sms", "orderTracking", "promotional", "securityAlerts"];
+    const updates = {};
+
+    for (const key of allowed) {
+      if (typeof req.body[key] === "boolean") {
+        updates[`notifications.${key}`] = req.body[key];
+      }
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ success: false, error: "No valid notification fields provided" });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    res.json({ success: true, message: "Notification preferences updated", notifications: user.notifications });
+  } catch (err) {
+    console.error("[Update Notifications]", err.message);
+    res.status(500).json({ success: false, error: "Failed to update notification preferences" });
+  }
+});
+
+// ── Toggle Two-Factor Authentication ────────────────────────────────────────
+app.put("/api/users/2fa", protect, async (req, res) => {
+  try {
+    const { enabled, method } = req.body;
+
+    if (typeof enabled !== "boolean") {
+      return res.status(400).json({ success: false, error: "'enabled' must be a boolean" });
+    }
+
+    const validMethods = ["email", "sms", "authenticator", ""];
+    const safeMethod = validMethods.includes(method) ? method : "email";
+
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      {
+        $set: {
+          "twoFactorAuth.enabled": enabled,
+          "twoFactorAuth.method": enabled ? safeMethod || "email" : "",
+        },
+      },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    console.log(`[AMBIENCE] ✅ 2FA ${enabled ? "enabled" : "disabled"} for ${user.email}`);
+    res.json({
+      success: true,
+      message: enabled ? "Two-factor authentication enabled" : "Two-factor authentication disabled",
+      twoFactorAuth: { enabled: user.twoFactorAuth.enabled, method: user.twoFactorAuth.method },
+    });
+  } catch (err) {
+    console.error("[2FA Toggle]", err.message);
+    res.status(500).json({ success: false, error: "Failed to update 2FA settings" });
+  }
+});
+
+// ── Create Support Ticket ───────────────────────────────────────────────────
+app.post("/api/support", protect, async (req, res) => {
+  try {
+    const { category, orderId, message } = req.body;
+
+    if (!category || !message) {
+      return res.status(400).json({ success: false, error: "Category and message are required" });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    const ticket = await SupportTicket.create({
+      user: user._id,
+      userName: user.displayName || user.name || user.email?.split("@")[0] || "User",
+      userEmail: user.email || "",
+      category,
+      orderId: orderId || "",
+      message: message.trim(),
+    });
+
+    console.log(`[AMBIENCE] ✅ Support ticket created: ${ticket._id} by ${user.email}`);
+    res.status(201).json({
+      success: true,
+      message: "Your ticket has been sent to our Admin team",
+      ticket: {
+        _id: ticket._id,
+        category: ticket.category,
+        status: ticket.status,
+        createdAt: ticket.createdAt,
+      },
+    });
+  } catch (err) {
+    console.error("[Create Support Ticket]", err.message);
+    if (err.name === "ValidationError") {
+      const messages = Object.values(err.errors).map((e) => e.message).join(", ");
+      return res.status(400).json({ success: false, error: messages });
+    }
+    res.status(500).json({ success: false, error: "Failed to create support ticket" });
+  }
+});
+
+// ── Admin: Get All Support Tickets ──────────────────────────────────────────
+app.get("/api/admin/support-tickets", protect, requireAdmin, async (req, res) => {
+  try {
+    const filter = {};
+    if (req.query.status && ["open", "in-progress", "resolved", "closed"].includes(req.query.status)) {
+      filter.status = req.query.status;
+    }
+
+    const tickets = await SupportTicket.find(filter)
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json({ success: true, tickets, count: tickets.length });
+  } catch (err) {
+    console.error("[Admin Get Tickets]", err.message);
+    res.status(500).json({ success: false, error: "Failed to fetch support tickets" });
+  }
+});
+
+// ── Admin: Update Support Ticket Status ─────────────────────────────────────
+app.put("/api/admin/support-tickets/:id/status", protect, requireAdmin, async (req, res) => {
+  try {
+    const { status, adminNotes } = req.body;
+
+    if (!status || !["open", "in-progress", "resolved", "closed"].includes(status)) {
+      return res.status(400).json({ success: false, error: "Valid status is required" });
+    }
+
+    const updates = { status };
+    if (typeof adminNotes === "string") {
+      updates.adminNotes = adminNotes.trim();
+    }
+
+    const ticket = await SupportTicket.findByIdAndUpdate(
+      req.params.id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    if (!ticket) {
+      return res.status(404).json({ success: false, error: "Ticket not found" });
+    }
+
+    console.log(`[AMBIENCE] ✅ Ticket ${ticket._id} status → ${status}`);
+    res.json({ success: true, message: "Ticket updated", ticket });
+  } catch (err) {
+    console.error("[Admin Update Ticket]", err.message);
+    res.status(500).json({ success: false, error: "Failed to update ticket" });
   }
 });
 

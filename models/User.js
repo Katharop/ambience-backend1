@@ -178,6 +178,22 @@ const userSchema = new mongoose.Schema(
       expiresAt:     { type: Date, default: null },
       razorpaySubId: { type: String, default: null },
     },
+
+    // ── Notification Preferences ─────────────────────────────────────────────
+    notifications: {
+      email:          { type: Boolean, default: true },
+      push:           { type: Boolean, default: true },
+      sms:            { type: Boolean, default: false },
+      orderTracking:  { type: Boolean, default: true },
+      promotional:    { type: Boolean, default: false },
+      securityAlerts: { type: Boolean, default: true },
+    },
+
+    // ── Two-Factor Authentication ────────────────────────────────────────────
+    twoFactorAuth: {
+      enabled: { type: Boolean, default: false },
+      method:  { type: String, enum: ['email', 'sms', 'authenticator', ''], default: '' },
+    },
   },
   {
     timestamps: true,
@@ -267,6 +283,10 @@ userSchema.methods.toSafeObject = function () {
     displayName: this.displayName,
     proSubscription: this.proSubscription,
     isProMember: this.isProMember,
+    notifications: this.notifications,
+    twoFactorAuth: this.twoFactorAuth
+      ? { enabled: this.twoFactorAuth.enabled, method: this.twoFactorAuth.method }
+      : { enabled: false, method: '' },
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };
