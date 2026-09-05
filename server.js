@@ -350,6 +350,68 @@ app.post("/api/auth/reset-password",  authLimiter, authController.resetPassword)
 // Profile Management (protected)
 app.put("/api/auth/update-profile",   protect, authController.updateProfile);
 
+// ── Admin Login Rate Limiter (aggressive) ────────────────────────────────────
+const adminLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Only 5 attempts per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: "Too many admin login attempts. Account locked for 15 minutes.",
+    code: "RATE_LIMIT_ADMIN",
+  },
+});
+
+// ── Admin Login Endpoint ────────────────────────────────────────────────────
+app.post('/api/auth/admin-login', adminLoginLimiter, async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ success: false, error: 'Email and password are required.' });
+    }
+
+    // Find user with password field
+    const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
+    if (!user) {
+      console.warn(`[SECURITY] ⚠️ Admin login attempt with unknown email: ${email} from IP: ${req.ip}`);
+      return res.status(401).json({ success: false, error: 'Invalid credentials.' });
+    }
+
+    // Verify password
+    const isMatch = await user.matchPassword(password);
+    if (!isMatch) {
+      console.warn(`[SECURITY] ⚠️ Admin login FAILED for ${email} (wrong password) from IP: ${req.ip}`);
+      return res.status(401).json({ success: false, error: 'Invalid credentials.' });
+    }
+
+    // Verify admin role
+    if (user.role !== 'admin') {
+      console.warn(`[SECURITY] 🚫 Non-admin user ${email} (role: ${user.role}) attempted admin login from IP: ${req.ip}`);
+      return res.status(403).json({ success: false, error: 'Access denied. Admin privileges required.', code: 'NOT_ADMIN' });
+    }
+
+    // Generate JWT
+    const jwt = require('jsonwebtoken');
+    const token = jwt.sign(
+      { id: user._id, role: user.role, tokenVersion: user.tokenVersion },
+      process.env.JWT_SECRET,
+      { algorithm: 'HS256', expiresIn: '24h', issuer: 'ambience', audience: 'ambience-client' }
+    );
+
+    console.log(`[SECURITY] ✅ Admin login SUCCESS for ${email} from IP: ${req.ip}`);
+    
+    res.json({
+      success: true,
+      token,
+      user: user.toSafeObject(),
+    });
+  } catch (err) {
+    console.error('[Admin Login Error]', err.message);
+    res.status(500).json({ success: false, error: 'Server error during authentication.' });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 4.2: User Address Management Routes
 // ═══════════════════════════════════════════════════════════════════════════════
