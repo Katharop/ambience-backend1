@@ -81,6 +81,10 @@ const productSchema = new mongoose.Schema(
       default: [],
       validate: [arr => arr.length <= 8, 'Maximum 8 sub-images allowed'],
     },
+    videoUrl: {
+      type: String,
+      default: '',
+    },
     specifications: {
       type: Map,
       of: String,

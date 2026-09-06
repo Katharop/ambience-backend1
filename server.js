@@ -857,6 +857,35 @@ app.get('/api/products/pending-deals', protect, restrictTo('admin'), async (req,
   }
 });
 
+// ── Similar Products: Fetch by same category (PUBLIC) ───────────────────────
+// Returns up to 8 live products in the same category, excluding the current product.
+// Used for "You May Also Like" / "More in this Category" recommendations.
+app.get('/api/products/:id/similar', async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, error: 'Invalid product ID format' });
+    }
+    const currentProduct = await Product.findById(req.params.id).select('category');
+    if (!currentProduct) {
+      return res.status(404).json({ success: false, error: 'Product not found' });
+    }
+    const similarProducts = await Product.find({
+      _id: { $ne: currentProduct._id },
+      category: currentProduct.category,
+      status: 'live',
+      isApproved: true,
+    })
+      .sort({ createdAt: -1 })
+      .limit(8)
+      .select('name brand category imageUrl retailPrice dealPrice glyph accent tags tag');
+
+    return res.status(200).json({ success: true, products: similarProducts });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error fetching similar products:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch similar products' });
+  }
+});
+
 app.get("/api/products/:id", async (req, res) => {
   try {
     // ── Validate ObjectId to prevent Mongoose CastError ────────────────────
@@ -889,6 +918,8 @@ app.post("/api/products", protect, requireAdmin, async (req, res) => {
       colorVariantModels,
       // Multi-image & gallery fields
       imageUrls, subImages,
+      // Video field
+      videoUrl,
       // Product detail fields
       highlights, tags, spec, dynamicSpecs,
       // Category-specific specifications
@@ -905,6 +936,8 @@ app.post("/api/products", protect, requireAdmin, async (req, res) => {
       // Multi-image fields (sanitized)
       imageUrls: Array.isArray(imageUrls) ? imageUrls.filter(u => typeof u === 'string' && u.trim()) : [],
       subImages: Array.isArray(subImages) ? subImages.filter(u => typeof u === 'string' && u.trim()) : [],
+      // Video URL (sanitized)
+      videoUrl: (typeof videoUrl === 'string' && videoUrl.trim()) ? videoUrl.trim() : '',
       // Product detail fields (sanitized)
       highlights: Array.isArray(highlights) ? highlights.filter(h => typeof h === 'string' && h.trim()) : [],
       tags: Array.isArray(tags) ? tags.filter(t => t && (typeof t === 'string' ? t.trim() : typeof t === 'object')) : [],
@@ -971,6 +1004,8 @@ app.put("/api/products/:id", protect, requireAdmin, async (req, res) => {
       'colorVariantModels',
       // Multi-image & gallery fields
       'imageUrls', 'subImages',
+      // Video field
+      'videoUrl',
       // Product detail fields
       'highlights', 'tags', 'spec', 'dynamicSpecs',
       // Category-specific specifications
@@ -1059,7 +1094,7 @@ app.put('/api/products/my-submissions/:id', protect, async (req, res) => {
     const isOwner = [mongoId, uuidId, email].filter(Boolean).includes(product.submittedBy);
     if (!isOwner) return res.status(403).json({ success: false, error: 'Not authorized to edit this product' });
     if (!['pending', 'live'].includes(product.status)) return res.status(400).json({ success: false, error: 'Cannot edit archived or rejected products' });
-    const allowed = ['name', 'description', 'retailPrice', 'dealPrice', 'category', 'subcategory', 'imageUrl', 'modelUrl', 'sizeVariants', 'colorVariants'];
+    const allowed = ['name', 'description', 'retailPrice', 'dealPrice', 'category', 'subcategory', 'imageUrl', 'modelUrl', 'sizeVariants', 'colorVariants', 'videoUrl'];
     for (const f of allowed) {
       if (req.body[f] !== undefined) {
         if (f === 'retailPrice' || f === 'dealPrice') { const v = parseFloat(req.body[f]); if (!isNaN(v) && v > 0) product[f] = v; }
@@ -1144,6 +1179,7 @@ app.post("/api/products/create", protect, async (req, res) => {
       isOfficial, submittedBy, source, hasARSupport, modelUrl,
       sizeVariants, colorVariants,
       highlights, specifications, dynamicSpecs, subImages,
+      videoUrl,
     } = req.body;
 
     // ── Validation ──
@@ -1242,6 +1278,7 @@ app.post("/api/products/create", protect, async (req, res) => {
       specifications: parsedSpecifications,
       imageUrl: imageUrl.trim(),
       subImages: parsedSubImages,
+      videoUrl: (typeof videoUrl === 'string' && videoUrl.trim()) ? videoUrl.trim() : '',
       modelUrl: modelUrl || "",
       has3DModel: hasARSupport === "true" || hasARSupport === true,
       sizeVariants: parsedSizes,
