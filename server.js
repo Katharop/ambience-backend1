@@ -962,6 +962,7 @@ app.post("/api/products", protect, requireAdmin, async (req, res) => {
       highlights, tags, spec, dynamicSpecs,
       // Category-specific specifications
       specifications,
+      enableAR, variants,
     } = req.body;
 
     const product = new Product({
@@ -985,6 +986,10 @@ app.post("/api/products", protect, requireAdmin, async (req, res) => {
       specifications: (specifications && typeof specifications === 'object' && !Array.isArray(specifications))
         ? Object.fromEntries(Object.entries(specifications).filter(([k, v]) => typeof k === 'string' && k.trim() && typeof v === 'string' && v.trim()))
         : {},
+      // Amazon-style variants
+      variants: Array.isArray(variants) ? variants.filter(v => v && typeof v === 'object' && (v.styleName || v.size || v.color || v.configuration)) : [],
+      // AR toggle
+      enableAR: enableAR !== undefined ? Boolean(enableAR) : true,
       // SECURITY: Force these fields — cannot be set by the request
       status: "live",
       isApproved: true,
@@ -1048,6 +1053,8 @@ app.put("/api/products/:id", protect, requireAdmin, async (req, res) => {
       'highlights', 'tags', 'spec', 'dynamicSpecs',
       // Category-specific specifications
       'specifications',
+      // Amazon-style variants & AR
+      'variants', 'enableAR',
     ];
     const updates = {};
     for (const field of allowedFields) {

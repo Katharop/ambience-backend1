@@ -135,6 +135,19 @@ const productSchema = new mongoose.Schema(
       label: { type: String, trim: true },
       value: { type: String, trim: true },
     }],
+    variants: [{
+      styleName: { type: String, trim: true },
+      size: { type: String, trim: true },
+      color: { type: String, trim: true },
+      colorHex: { type: String, trim: true },
+      configuration: { type: String, trim: true },
+      price: { type: Number, min: 0 },
+      stock: { type: Number, min: 0, default: 0 },
+    }],
+    enableAR: {
+      type: Boolean,
+      default: true,
+    },
     soldCount: {
       type: Number,
       default: 0,
