@@ -52,6 +52,7 @@ const { restrictTo }            = require("./middleware/authMiddleware");
 
 // ── Payment system imports ──────────────────────────────────────────────────
 const paymentController = require("./controllers/paymentController");
+const { handleWebhook }   = require("./controllers/webhookController");
 
 // ── Enterprise security middleware ──────────────────────────────────────────
 const cookieParser        = require("cookie-parser");
@@ -60,6 +61,8 @@ const hpp                 = require("hpp");
 const { threatDetection } = require("./middleware/threatDetection");
 const { sanitizeInputs, enforceJSON }  = require("./middleware/sanitize");
 const { paymentGuard }    = require("./middleware/paymentGuard");
+const { requestId }       = require("./middleware/requestId");
+const { validateCreateOrder, validateVerifyPayment, validateRegister, validateLogin, validateAddress } = require("./middleware/validators");
 
 const Product = require("./models/Product");
 const FlagshipDeal = require("./models/FlagshipDeal");
@@ -158,25 +161,50 @@ const connectDB = async () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 const app = express();
 
+// ── Trust proxy (required for accurate IP detection behind Render/Cloudflare) ─
+if (process.env.TRUST_PROXY) {
+  app.set("trust proxy", Number(process.env.TRUST_PROXY) || 1);
+}
+
+// ── Request ID (distributed tracing) ────────────────────────────────────────
+app.use(requestId);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WEBHOOK ROUTE — Must be registered BEFORE express.json() middleware
+// because webhooks need the raw (unparsed) request body for HMAC verification.
+// ═══════════════════════════════════════════════════════════════════════════════
+app.post(
+  "/api/payment/webhook",
+  express.raw({ type: "application/json" }),
+  handleWebhook
+);
+
 // ── Security headers via Helmet (Enterprise Hardened) ───────────────────────
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginOpenerPolicy: { policy: "same-origin" },
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
+      scriptSrc: ["'self'", "https://checkout.razorpay.com"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", "https:"],
+      connectSrc: [
+        "'self'",
+        "https://api.razorpay.com",
+        "https://lumberjack.razorpay.com",
+        process.env.SERVER_URL || "http://localhost:5000",
+      ].filter(Boolean),
       fontSrc: ["'self'", "https:", "data:"],
       objectSrc: ["'none'"],
-      frameSrc: ["'none'"],
+      frameSrc: ["https://api.razorpay.com", "https://checkout.razorpay.com"],
       baseUri: ["'self'"],
       formAction: ["'self'"],
+      upgradeInsecureRequests: [],
     },
   },
   hsts: {
-    maxAge: 31536000,
+    maxAge: 63072000, // 2 years (OWASP recommendation)
     includeSubDomains: true,
     preload: true,
   },
@@ -186,15 +214,24 @@ app.use(helmet({
   xssFilter: true,
 }));
 
+// ── Permissions Policy (disable unnecessary browser APIs) ───────────────────
+app.use((req, res, next) => {
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(self), payment=(self), usb=()"
+  );
+  next();
+});
+
 // ── Cookie parser (required for httpOnly refresh token cookies) ─────────────
 app.use(cookieParser());
 
 // ── CORS — Strict origin whitelist with credentials ─────────────────────────
-const ALLOWED_ORIGINS = [
-  "http://localhost:3000",
-  "https://ambienced.netlify.app",
-  "https://ambience-fronten.vercel.app",
-];
+// Origins configurable via ALLOWED_ORIGINS env var (comma-separated)
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
+  : ["http://localhost:3000", "https://ambienced.netlify.app", "https://ambience-fronten.vercel.app"];
+
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || ALLOWED_ORIGINS.includes(origin)) {
@@ -206,7 +243,8 @@ app.use(cors({
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
+  exposedHeaders: ["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
   maxAge: 86400,
 }));
 
@@ -302,7 +340,7 @@ const socialAuthLimiter = rateLimit({
 
 const paymentLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 5, // Tightened: 5 payment attempts per 15 minutes
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: "Too many payment requests. Please try again after 15 minutes." },
@@ -321,12 +359,12 @@ const { sendEmail: sendServiceEmail, isEmailConfigured } = require("./utils/emai
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Registration & Verification
-app.post("/api/auth/register",    authLimiter, authController.register);
+app.post("/api/auth/register",    authLimiter, validateRegister, authController.register);
 app.post("/api/auth/verify-otp",  otpLimiter,  authController.verifyOTP);
 app.post("/api/auth/resend-otp",  otpLimiter,  authController.resendOTP);
 
 // Login
-app.post("/api/auth/login",       authLimiter, authController.login);
+app.post("/api/auth/login",       authLimiter, validateLogin, authController.login);
 app.post("/api/auth/logout",      authController.logout);
 
 // Social OAuth
@@ -429,7 +467,7 @@ app.get("/api/users/addresses", protect, async (req, res) => {
 });
 
 // POST /api/users/addresses — Add a new shipping address
-app.post("/api/users/addresses", protect, async (req, res) => {
+app.post("/api/users/addresses", protect, validateAddress, async (req, res) => {
   try {
     const { label, houseNo, street, landmark, city, state, zip, country, isDefault } = req.body;
     if (!houseNo || !street || !city || !state || !zip) {
@@ -755,8 +793,8 @@ app.delete("/api/admin/support-tickets/:id", protect, requireAdmin, async (req, 
 // All payment routes are JWT-protected and rate-limited.
 // The paymentGuard middleware (global) already blocks raw financial data.
 // ═══════════════════════════════════════════════════════════════════════════════
-app.post("/api/payment/create-order", paymentLimiter, protect, paymentController.createOrder);
-app.post("/api/payment/verify",       paymentLimiter, protect, paymentController.verifyPayment);
+app.post("/api/payment/create-order", paymentLimiter, protect, validateCreateOrder, paymentController.createOrder);
+app.post("/api/payment/verify",       paymentLimiter, protect, validateVerifyPayment, paymentController.verifyPayment);
 
 // ── Order History (protected) ───────────────────────────────────────────────
 app.get("/api/orders/my-orders",      protect, paymentController.getMyOrders);

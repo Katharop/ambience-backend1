@@ -1,26 +1,31 @@
 // utils/generateToken.js
 //
-// AMBIENCE — JWT Token Generator (Persistent Login)
+// AMBIENCE — JWT Token Generator (Short-Lived Access + Long-Lived Refresh)
 //
-// Generates long-lived access tokens (365 days) and refresh tokens (365 days).
-// Users stay logged in permanently until they manually sign out.
-// Security is enforced via password-change invalidation and tokenVersion revocation.
-// Includes audience, issuer, subject, and unique JWT ID (jti) claims.
+// Access tokens:  15 minutes — stored in-memory on frontend (NOT localStorage)
+// Refresh tokens: 30 days — stored in httpOnly cookie
+//
+// Security enforced via:
+//   • tokenVersion claim (emergency mass-revocation)
+//   • Password-change invalidation (tokens issued before change = invalid)
+//   • Algorithm pinning (HS256 only)
+//   • Audience, issuer, subject, and unique JWT ID (jti) claims
 
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 
 /**
- * Generate a long-lived access token (365 days).
- * Persistent login — user stays authenticated until manual logout.
+ * Generate a short-lived access token (15 minutes).
+ * Stored in-memory only — never in localStorage.
  *
- * @param {string} userId   — User's MongoDB _id
- * @param {string} email    — User's email
- * @param {string} role     — User's role (customer, admin, moderator)
- * @param {string} expiresIn — Override expiry (default: "365d")
+ * @param {string} userId       — User's MongoDB _id
+ * @param {string} email        — User's email
+ * @param {string} role         — User's role (customer, admin, moderator)
+ * @param {number} tokenVersion — User's token version (for revocation)
+ * @param {string} expiresIn    — Override expiry (default: "15m")
  * @returns {string} — Signed JWT access token
  */
-const generateAccessToken = (userId, email, role = "customer", expiresIn = "365d") => {
+const generateAccessToken = (userId, email, role = "customer", tokenVersion = 0, expiresIn = "15m") => {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
     throw new Error("JWT_SECRET is not defined in environment variables.");
@@ -32,6 +37,7 @@ const generateAccessToken = (userId, email, role = "customer", expiresIn = "365d
       email,
       role,
       type: "access",
+      tokenVersion,
     },
     secret,
     {
@@ -46,8 +52,8 @@ const generateAccessToken = (userId, email, role = "customer", expiresIn = "365d
 };
 
 /**
- * Generate a long-lived refresh token (365 days).
- * Used as fallback session renewal via httpOnly cookie.
+ * Generate a long-lived refresh token (30 days).
+ * Stored as httpOnly cookie — inaccessible to JavaScript.
  *
  * @param {string} userId       — User's MongoDB _id
  * @param {string} email        — User's email
@@ -71,7 +77,7 @@ const generateRefreshToken = (userId, email, role = "customer", tokenVersion = 0
     },
     secret,
     {
-      expiresIn: "365d",
+      expiresIn: "30d",
       algorithm: "HS256",
       issuer: "ambience",
       audience: "ambience-client",

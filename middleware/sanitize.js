@@ -1,34 +1,46 @@
 // middleware/sanitize.js
 //
-// AMBIENCE — Deep Input Sanitization Middleware
+// AMBIENCE — Deep Input Sanitization Middleware (v2.0 — Enhanced)
 //
 // Enterprise-grade protection against:
 //   • Cross-Site Scripting (XSS) via HTML/script tag injection
 //   • NoSQL Injection via $-prefixed operators in nested objects
 //   • Content-Type spoofing on JSON endpoints
 //   • Prototype pollution via __proto__ and constructor keys
+//   • URI scheme attacks (javascript:, data:, vbscript:)
+//   • Unicode normalization bypass attacks
 
 /**
- * Strip dangerous HTML tags and script content from a string.
- * Preserves legitimate text content.
+ * Strip dangerous HTML tags, script content, and URI schemes from a string.
+ * Applies Unicode NFC normalization first to prevent encoding bypasses.
  */
 const stripHTML = (str) => {
   if (typeof str !== 'string') return str;
-  return str
+
+  // Unicode NFC normalization — prevents homoglyph and encoding bypasses
+  let sanitized = str.normalize('NFC');
+
+  return sanitized
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
     .replace(/<\/?[^>]+(>|$)/g, '')
     .replace(/javascript:/gi, '')
+    .replace(/vbscript:/gi, '')
+    .replace(/data:\s*text\/html/gi, '')
     .replace(/on\w+\s*=/gi, '')
     .replace(/&lt;script/gi, '')
     .replace(/eval\s*\(/gi, '')
-    .replace(/expression\s*\(/gi, '');
+    .replace(/expression\s*\(/gi, '')
+    .replace(/url\s*\(/gi, '')
+    .replace(/import\s*\(/gi, '')
+    .replace(/\\u00[0-9a-f]{2}/gi, ''); // Escaped Unicode sequences
 };
 
 /**
  * Recursively sanitize an object:
- * - Strip HTML from strings
+ * - Strip HTML/XSS from strings
  * - Remove $-prefixed keys (NoSQL injection)
  * - Remove __proto__ and constructor keys (prototype pollution)
+ * - Enforce max depth to prevent stack overflow
  */
 const deepSanitize = (obj, depth = 0) => {
   if (depth > 10) return obj; // Prevent infinite recursion

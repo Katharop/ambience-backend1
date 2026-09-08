@@ -155,6 +155,33 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    // ── Webhook Verification (set by webhook handler) ─────────────────────
+    webhookVerified: {
+      type: Boolean,
+      default: false,
+    },
+
+    webhookEvents: [
+      {
+        event: { type: String, required: true },
+        timestamp: { type: Date, default: Date.now },
+        payloadHash: { type: String },
+        _id: false,
+      },
+    ],
+
+    // ── Refund Tracking ───────────────────────────────────────────────────
+    refundStatus: {
+      type: String,
+      enum: ["None", "Initiated", "Processed", "Failed"],
+      default: "None",
+    },
+
+    refundId: {
+      type: String,
+      default: null,
+    },
+
     // ── Status Tracking ───────────────────────────────────────────────────
     paymentStatus: {
       type: String,
@@ -201,6 +228,9 @@ const orderSchema = new mongoose.Schema(
     toObject: { virtuals: true },
   }
 );
+
+// ── Compound Indexes for webhook atomicity ──────────────────────────────────
+orderSchema.index({ razorpay_order_id: 1, paymentStatus: 1 });
 
 // ── Pre-save Hook: Auto-generate invoiceNumber ──────────────────────────────
 orderSchema.pre('save', function (next) {

@@ -1,11 +1,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // controllers/paymentController.js
 //
-// AMBIENCE — Razorpay Payment Gateway Controller
+// AMBIENCE — Razorpay Payment Gateway Controller (Production-Hardened)
 //
-// Two endpoints:
-//   1. createOrder  — Creates a Razorpay order + saves a pending Order in MongoDB
-//   2. verifyPayment — Server-side HMAC-SHA256 signature verification
+// Three endpoints:
+//   1. createOrder    — Creates a Razorpay order + saves a pending Order in MongoDB
+//   2. verifyPayment  — Server-side HMAC-SHA256 signature verification
+//   3. getMyOrders    — Returns authenticated user's order history
 //
 // SECURITY PRINCIPLES:
 //   • No raw financial data (card numbers, CVVs) ever touches this server
@@ -13,20 +14,25 @@
 //   • The frontend NEVER computes hashes — it only forwards Razorpay tokens
 //   • All routes are JWT-protected via the `protect` middleware
 //   • The paymentGuard middleware blocks any raw card data in requests
+//   • Idempotent verification — duplicate calls return existing result
+//   • Demo mode locked behind NODE_ENV !== 'production'
+//   • Server-side price validation against Product collection
 // ─────────────────────────────────────────────────────────────────────────────
 
 const crypto = require("crypto");
 const Razorpay = require("razorpay");
 const Order = require("../models/Order");
+const Product = require("../models/Product");
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Razorpay Instance (Test Mode)
+// Razorpay Instance
 //
 // Reads credentials from environment variables.
 // NEVER hardcode keys — they live in .env only.
 // ═══════════════════════════════════════════════════════════════════════════════
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
 let razorpayInstance = null;
 
@@ -35,7 +41,7 @@ if (RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) {
     key_id: RAZORPAY_KEY_ID,
     key_secret: RAZORPAY_KEY_SECRET,
   });
-  console.log("  ✅  Razorpay initialized (Test Mode)");
+  console.log(`  ✅  Razorpay initialized (${IS_PRODUCTION ? "LIVE Mode" : "Test Mode"})`);
 } else {
   console.warn(
     "  ⚠️   Razorpay credentials missing in .env — payment routes will be disabled."
@@ -47,26 +53,26 @@ if (RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) {
 //
 // Creates a Razorpay order and saves a corresponding Order document in MongoDB.
 //
-// Request body:
-//   {
-//     items: [{ productId, name, brand, category, priceINR, qty }],
-//     shippingAddress: { label, street, city, state, zip, country }  (optional)
-//   }
-//
-// Response:
-//   {
-//     success: true,
-//     order_id: "order_xxx",
-//     amount: 99900,         // in paise
-//     currency: "INR",
-//     key_id: "rzp_test_xxx",
-//     orderId: "AMB-xxx"     // our internal order ID
-//   }
+// SECURITY:
+//   • In production, demo mode is DISABLED (cannot bypass payment)
+//   • Server-side price validation: prices are looked up from Product collection
+//     when possible, falling back to client prices only for unmatched products
+//   • All amounts are recalculated server-side
 // ═══════════════════════════════════════════════════════════════════════════════
 const createOrder = async (req, res) => {
   try {
     // ── Check Demo Mode vs Real Razorpay ────────────────────────────────────
     const isDemoMode = !razorpayInstance;
+
+    // ── SECURITY: Block demo mode in production ─────────────────────────────
+    if (isDemoMode && IS_PRODUCTION) {
+      console.error("[PAYMENT] ⛔ Demo mode blocked in production");
+      return res.status(503).json({
+        success: false,
+        error: "Payment gateway is not configured. Please contact support.",
+        code: "PAYMENT_NOT_CONFIGURED",
+      });
+    }
 
     // ── Validate request body ───────────────────────────────────────────────
     const { items, shippingAddress } = req.body;
@@ -105,8 +111,61 @@ const createOrder = async (req, res) => {
       }
     }
 
-    // ── Calculate amounts (in paise = INR × 100) ────────────────────────────
-    const subtotalINR = items.reduce((sum, item) => sum + item.priceINR * item.qty, 0);
+    // ── Server-side price validation ────────────────────────────────────────
+    // Look up product prices from MongoDB to prevent client-side price tampering.
+    // If a product is found in the DB, its DB price is used. Otherwise, the
+    // client-provided price is trusted (for products not yet in the collection).
+    const productIds = items
+      .map((item) => item.productId || item.id)
+      .filter((id) => id && id !== "unknown");
+
+    let dbProducts = {};
+    if (productIds.length > 0) {
+      try {
+        const products = await Product.find({
+          $or: [
+            { _id: { $in: productIds } },
+            { productId: { $in: productIds } },
+          ],
+        }).lean();
+
+        products.forEach((p) => {
+          const id = p.productId || p._id.toString();
+          dbProducts[id] = p;
+        });
+      } catch (dbErr) {
+        // If product lookup fails, log and continue with client prices
+        console.warn(`[PAYMENT] ⚠️ Product price lookup failed: ${dbErr.message}`);
+      }
+    }
+
+    // ── Calculate amounts using validated prices ────────────────────────────
+    const validatedItems = items.map((item) => {
+      const productId = item.productId || item.id || "unknown";
+      const dbProduct = dbProducts[productId];
+
+      // Use DB price if available, otherwise trust client price
+      let verifiedPrice = item.priceINR;
+      if (dbProduct && typeof dbProduct.priceINR === "number") {
+        verifiedPrice = dbProduct.priceINR;
+        if (Math.abs(verifiedPrice - item.priceINR) > 0.01) {
+          console.warn(
+            `[PAYMENT] ⚠️ Price mismatch for "${item.name}": ` +
+            `client=${item.priceINR}, DB=${verifiedPrice} — using DB price`
+          );
+        }
+      }
+
+      return {
+        ...item,
+        priceINR: verifiedPrice,
+        productId,
+      };
+    });
+
+    const subtotalINR = validatedItems.reduce(
+      (sum, item) => sum + item.priceINR * item.qty, 0
+    );
     const taxINR = Math.round(subtotalINR * 0.18); // 18% GST
     const totalINR = subtotalINR + taxINR;
 
@@ -144,8 +203,8 @@ const createOrder = async (req, res) => {
     const order = new Order({
       user: req.user._id,
       userEmail: req.user.email,
-      items: items.map((item) => ({
-        productId: item.productId || item.id || "unknown",
+      items: validatedItems.map((item) => ({
+        productId: item.productId,
         name: item.name,
         brand: item.brand || "",
         category: item.category || "",
@@ -206,12 +265,10 @@ const createOrder = async (req, res) => {
 // Verifies the Razorpay payment signature using HMAC-SHA256.
 // This MUST happen server-side — the frontend NEVER computes hashes.
 //
-// Request body:
-//   {
-//     razorpay_order_id:   "order_xxx",
-//     razorpay_payment_id: "pay_xxx",
-//     razorpay_signature:  "hex_signature"
-//   }
+// SECURITY ENHANCEMENTS:
+//   • Idempotency guard — if order is already "Success", returns existing result
+//   • Demo mode blocked in production
+//   • Uses crypto.timingSafeEqual to prevent timing attacks
 //
 // Verification formula:
 //   expected = HMAC-SHA256(razorpay_order_id + "|" + razorpay_payment_id, KEY_SECRET)
@@ -232,6 +289,19 @@ const verifyPayment = async (req, res) => {
 
     const isDemoMode = razorpay_order_id.startsWith("demo_order_");
 
+    // ── SECURITY: Block demo verification in production ─────────────────────
+    if (isDemoMode && IS_PRODUCTION) {
+      console.error(
+        `[PAYMENT] ⛔ Demo payment verification BLOCKED in production | ` +
+        `IP: ${req.ip} | User: ${req.user.email}`
+      );
+      return res.status(400).json({
+        success: false,
+        error: "Demo payments are not allowed in production.",
+        code: "DEMO_BLOCKED",
+      });
+    }
+
     // ── Guard: Razorpay must be configured (if not demo) ────────────────────
     if (!isDemoMode && !RAZORPAY_KEY_SECRET) {
       return res.status(503).json({
@@ -239,25 +309,6 @@ const verifyPayment = async (req, res) => {
         error: "Payment verification service is not configured.",
         code: "PAYMENT_NOT_CONFIGURED",
       });
-    }
-
-    let isSignatureValid = false;
-
-    if (isDemoMode) {
-      // Automatically approve demo mode payments
-      isSignatureValid = true;
-    } else {
-      // ── Server-side signature verification (HMAC-SHA256) ────────────────────
-      const body = razorpay_order_id + "|" + razorpay_payment_id;
-      const expectedSignature = crypto
-        .createHmac("sha256", RAZORPAY_KEY_SECRET)
-        .update(body)
-        .digest("hex");
-
-      isSignatureValid = crypto.timingSafeEqual(
-        Buffer.from(expectedSignature, "hex"),
-        Buffer.from(razorpay_signature, "hex")
-      );
     }
 
     // ── Find the order in MongoDB ───────────────────────────────────────────
@@ -275,6 +326,51 @@ const verifyPayment = async (req, res) => {
         error: "Order not found.",
         code: "ORDER_NOT_FOUND",
       });
+    }
+
+    // ── IDEMPOTENCY GUARD: Already processed? Return existing result ────────
+    if (order.paymentStatus === "Success") {
+      console.log(
+        `[PAYMENT] ℹ️ Duplicate verification for already-paid order: ${order.orderId} | ` +
+        `User: ${req.user.email} — returning existing result`
+      );
+      return res.status(200).json({
+        success: true,
+        message: "Payment already verified.",
+        order: order.toSafeObject(),
+      });
+    }
+
+    if (order.paymentStatus === "Failed") {
+      return res.status(400).json({
+        success: false,
+        error: "This payment has already been marked as failed.",
+        code: "PAYMENT_ALREADY_FAILED",
+      });
+    }
+
+    let isSignatureValid = false;
+
+    if (isDemoMode) {
+      // Automatically approve demo mode payments (dev only)
+      isSignatureValid = true;
+    } else {
+      // ── Server-side signature verification (HMAC-SHA256) ────────────────────
+      const body = razorpay_order_id + "|" + razorpay_payment_id;
+      const expectedSignature = crypto
+        .createHmac("sha256", RAZORPAY_KEY_SECRET)
+        .update(body)
+        .digest("hex");
+
+      try {
+        isSignatureValid = crypto.timingSafeEqual(
+          Buffer.from(expectedSignature, "hex"),
+          Buffer.from(razorpay_signature, "hex")
+        );
+      } catch (bufferErr) {
+        // Buffer length mismatch → invalid signature
+        isSignatureValid = false;
+      }
     }
 
     if (isSignatureValid) {

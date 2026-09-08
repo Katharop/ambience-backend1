@@ -42,7 +42,7 @@ const REFRESH_COOKIE_NAME = "ambience_refresh";
 const setRefreshCookie = (res, token) => {
   res.cookie(REFRESH_COOKIE_NAME, token, {
     ...getCookieOptions(),
-    maxAge: 365 * 24 * 60 * 60 * 1000, // 365 days — persistent login
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days — matches refresh token expiry
     path: "/api/auth",                  // Only sent to auth endpoints
   });
 };

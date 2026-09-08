@@ -262,7 +262,7 @@ exports.verifyOTP = async (req, res) => {
       }
 
       // Generate JWT
-      const token = generateAccessToken(user._id, user.email, user.role);
+      const token = generateAccessToken(user._id, user.email, user.role, user.tokenVersion);
       const refreshTkn = generateRefreshToken(user._id, user.email, user.role, user.tokenVersion);
       setRefreshCookie(res, refreshTkn);
 
@@ -411,7 +411,7 @@ exports.login = async (req, res) => {
     clearLoginAttempts(identifier);
 
     // Issue access token + httpOnly refresh cookie
-    const token = generateAccessToken(user._id, user.email, user.role);
+    const token = generateAccessToken(user._id, user.email, user.role, user.tokenVersion);
     const refreshTkn = generateRefreshToken(user._id, user.email, user.role, user.tokenVersion);
     setRefreshCookie(res, refreshTkn);
 
@@ -620,7 +620,7 @@ exports.googleLogin = async (req, res) => {
     }
 
     // ── Issue access token + httpOnly refresh cookie ─────────────────────
-    const token = generateAccessToken(user._id, user.email, user.role);
+    const token = generateAccessToken(user._id, user.email, user.role, user.tokenVersion);
     const refreshTkn = generateRefreshToken(user._id, user.email, user.role, user.tokenVersion);
     setRefreshCookie(res, refreshTkn);
 
@@ -702,7 +702,7 @@ exports.appleLogin = async (req, res) => {
     }
 
     // Generate tokens
-    const token = generateAccessToken(user._id, user.email, user.role);
+    const token = generateAccessToken(user._id, user.email, user.role, user.tokenVersion);
     const refreshTkn = generateRefreshToken(user._id, user.email, user.role, user.tokenVersion);
     setRefreshCookie(res, refreshTkn);
 
@@ -839,7 +839,7 @@ exports.twitterAuth = async (req, res) => {
       isNewUser = true;
     }
 
-    const token = generateAccessToken(user._id, user.email, user.role);
+    const token = generateAccessToken(user._id, user.email, user.role, user.tokenVersion);
     const refreshTkn = generateRefreshToken(user._id, user.email, user.role, user.tokenVersion);
     setRefreshCookie(res, refreshTkn);
 
@@ -1475,7 +1475,7 @@ exports.refreshToken = async (req, res) => {
   }
 
   // Issue new access token + rotated refresh token
-  const newAccessToken = generateAccessToken(user._id, user.email, user.role);
+  const newAccessToken = generateAccessToken(user._id, user.email, user.role, user.tokenVersion);
   const newRefreshToken = generateRefreshToken(user._id, user.email, user.role, user.tokenVersion);
   setRefreshCookie(res, newRefreshToken);
 
