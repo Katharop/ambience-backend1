@@ -986,7 +986,7 @@ app.post("/api/products", protect, requireAdmin, async (req, res) => {
       specifications: (specifications && typeof specifications === 'object' && !Array.isArray(specifications))
         ? Object.fromEntries(Object.entries(specifications).filter(([k, v]) => typeof k === 'string' && k.trim() && typeof v === 'string' && v.trim()))
         : {},
-      // Amazon-style variants
+      // Ambience Signature variants
       variants: Array.isArray(variants) ? variants.filter(v => v && typeof v === 'object' && (v.styleName || v.size || v.color || v.configuration)) : [],
       // AR toggle
       enableAR: enableAR !== undefined ? Boolean(enableAR) : true,
@@ -1053,7 +1053,7 @@ app.put("/api/products/:id", protect, requireAdmin, async (req, res) => {
       'highlights', 'tags', 'spec', 'dynamicSpecs',
       // Category-specific specifications
       'specifications',
-      // Amazon-style variants & AR
+      // Ambience Signature variants & AR
       'variants', 'enableAR',
     ];
     const updates = {};
