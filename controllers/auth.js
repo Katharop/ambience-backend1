@@ -52,11 +52,11 @@ const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Utility: Secure 6-digit OTP
+// Utility: Secure 4-digit OTP
 // ─────────────────────────────────────────────────────────────────────────────
 const generateSecureOTP = () => {
-  const otp = crypto.randomInt(0, 1000000);
-  return otp.toString().padStart(6, "0");
+  const otp = crypto.randomInt(0, 10000);
+  return otp.toString().padStart(4, "0");
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -230,10 +230,10 @@ exports.verifyOTP = async (req, res) => {
     return res.status(400).json({ success: false, error: "Email or phone is required." });
   }
 
-  if (!otp || typeof otp !== "string" || otp.length !== 6) {
+  if (!otp || typeof otp !== "string" || otp.length !== 4) {
     return res.status(400).json({
       success: false,
-      error: "Please enter a valid 6-digit verification code.",
+      error: "Please enter a valid 4-digit verification code.",
     });
   }
 
