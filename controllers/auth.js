@@ -221,10 +221,14 @@ exports.register = async (req, res) => {
 // Body: { email, otp, type: "register" | "reset" }
 // ═══════════════════════════════════════════════════════════════════════════════
 exports.verifyOTP = async (req, res) => {
-  const { email, phone, otp, type = "register" } = req.body;
+  const { email, phone, otp, type = "register", identifier: rawIdentifier } = req.body;
 
-  const sanitizedEmail = email ? validateEmail(email) : null;
-  const identifier = sanitizedEmail || phone;
+  // Support both legacy { email, phone } and unified { identifier } from frontend
+  const resolvedEmail = email || (rawIdentifier && rawIdentifier.includes("@") ? rawIdentifier : null);
+  const resolvedPhone = phone || (rawIdentifier && !rawIdentifier.includes("@") ? rawIdentifier : null);
+
+  const sanitizedEmail = resolvedEmail ? validateEmail(resolvedEmail) : null;
+  const identifier = sanitizedEmail || resolvedPhone;
 
   if (!identifier) {
     return res.status(400).json({ success: false, error: "Email or phone is required." });
@@ -985,9 +989,12 @@ exports.logout = async (req, res) => {
 // Body: { email }
 // ═══════════════════════════════════════════════════════════════════════════════
 exports.forgotPassword = async (req, res) => {
-  const { email } = req.body;
+  const { email, identifier: rawIdentifier } = req.body;
 
-  const sanitizedEmail = validateEmail(email);
+  // Support both legacy { email } and unified { identifier } from frontend
+  const resolvedEmail = email || (rawIdentifier && rawIdentifier.includes("@") ? rawIdentifier : null);
+
+  const sanitizedEmail = validateEmail(resolvedEmail);
   if (!sanitizedEmail) {
     return res
       .status(400)
@@ -1153,9 +1160,12 @@ exports.resetPassword = async (req, res) => {
 // Body: { email, type: "register" | "reset" }
 // ═══════════════════════════════════════════════════════════════════════════════
 exports.resendOTP = async (req, res) => {
-  const { email, type = "register" } = req.body;
+  const { email, type = "register", identifier: rawIdentifier } = req.body;
 
-  const sanitizedEmail = validateEmail(email);
+  // Support both legacy { email } and unified { identifier } from frontend
+  const resolvedEmail = email || (rawIdentifier && rawIdentifier.includes("@") ? rawIdentifier : null);
+
+  const sanitizedEmail = validateEmail(resolvedEmail);
   if (!sanitizedEmail) {
     return res
       .status(400)

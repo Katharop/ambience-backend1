@@ -14,12 +14,14 @@
 // For production at scale, replace with Redis.
 // ─────────────────────────────────────────────────────────────────────────────
 
+const crypto = require("crypto");
+
 // ── OTP Store ───────────────────────────────────────────────────────────────
 // Key: "email:type" → { otp, expiresAt, attempts }
 const otpStore = new Map();
 
-const OTP_TTL_MS = 20 * 60 * 1000;      // 20 minutes
-const OTP_MAX_ATTEMPTS = 5;
+const OTP_TTL_MS = 5 * 60 * 1000;       // 5 minutes (enterprise standard)
+const OTP_MAX_ATTEMPTS = 3;              // Block after 3 failed attempts
 
 /**
  * Store an OTP for a given email and type.
@@ -67,7 +69,13 @@ const verifyOTP = (identifier, otp, type = "register") => {
     };
   }
 
-  if (entry.otp !== otp) {
+  // Timing-safe comparison to prevent timing attacks
+  const storedBuffer = Buffer.from(entry.otp, "utf8");
+  const inputBuffer  = Buffer.from(String(otp).padEnd(storedBuffer.length), "utf8");
+  const isMatch = storedBuffer.length === inputBuffer.length &&
+                  crypto.timingSafeEqual(storedBuffer, inputBuffer);
+
+  if (!isMatch) {
     return {
       valid: false,
       error: `Incorrect code. ${OTP_MAX_ATTEMPTS - entry.attempts} attempt${OTP_MAX_ATTEMPTS - entry.attempts !== 1 ? "s" : ""} remaining.`,
