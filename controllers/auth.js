@@ -187,9 +187,19 @@ exports.register = async (req, res) => {
           logLabel: "Registration OTP",
         });
       } catch (emailErr) {
+        console.error("[AMBIENCE] ❌ Registration OTP email failed:", {
+          message: emailErr.message,
+          code: emailErr.code,
+          command: emailErr.command,
+          response: emailErr.response,
+          responseCode: emailErr.responseCode,
+        });
         await User.deleteOne({ _id: user._id });
         clearOTP(identifier);
-        return res.status(500).json({ success: false, error: "Failed to send email verification code." });
+        return res.status(500).json({
+          success: false,
+          error: "Failed to send verification email. Please check your email address and try again.",
+        });
       }
     }
 
@@ -1039,6 +1049,13 @@ exports.forgotPassword = async (req, res) => {
         logLabel: "Password Reset OTP",
       });
     } catch (emailErr) {
+      console.error("[AMBIENCE] ❌ Password Reset OTP email failed:", {
+        message: emailErr.message,
+        code: emailErr.code,
+        command: emailErr.command,
+        response: emailErr.response,
+        responseCode: emailErr.responseCode,
+      });
       clearOTP(sanitizedEmail);
       return res.status(500).json({
         success: false,
@@ -1200,6 +1217,13 @@ exports.resendOTP = async (req, res) => {
         logLabel: "Resent OTP",
       });
     } catch (emailErr) {
+      console.error("[AMBIENCE] ❌ Resend OTP email failed:", {
+        message: emailErr.message,
+        code: emailErr.code,
+        command: emailErr.command,
+        response: emailErr.response,
+        responseCode: emailErr.responseCode,
+      });
       clearOTP(sanitizedEmail);
       return res.status(500).json({
         success: false,
