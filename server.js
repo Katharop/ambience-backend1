@@ -43,7 +43,6 @@ const helmet     = require("helmet");
 const rateLimit  = require("express-rate-limit");
 const path       = require("path");
 const multer     = require("multer");
-const nodemailer = require("nodemailer");
 
 // ── Auth system imports ─────────────────────────────────────────────────────
 const authController = require("./controllers/auth");
@@ -80,7 +79,6 @@ const PORT       = process.env.PORT || 5000;
 const SERVER_URL = process.env.SERVER_URL || `http://localhost:${PORT}`;
 const MONGO_URI  = process.env.MONGO_URI;
 const GMAIL_USER = process.env.GMAIL_USER;
-const GMAIL_PASS = process.env.GMAIL_APP_PASSWORD;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 1: Connect to MongoDB Atlas
