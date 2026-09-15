@@ -1,98 +1,75 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // utils/emailService.js
 //
-// AMBIENCE — Gmail SMTP Email Service (Nodemailer)
+// AMBIENCE — Email Service via Resend (HTTP API)
 //
-// Hardened for deliverability:
-//   • Uses `service: 'gmail'` (Port 587 + STARTTLS) — compatible with Render,
-//     Railway, and other PaaS hosts that block outbound Port 465.
+// WHY RESEND INSTEAD OF NODEMAILER/SMTP?
+//   Render's free tier blocks ALL outbound SMTP ports (465 and 587), causing
+//   ETIMEDOUT errors with Gmail SMTP. Resend uses HTTPS (port 443) which is
+//   never blocked by any PaaS provider.
+//
+// Features:
+//   • Uses Resend HTTP API — works on Render, Railway, Vercel, etc.
 //   • Adds plain-text fallback for every email (spam-filter friendly)
-//   • Logs full SMTP diagnostics on failure (code, command, response)
-//   • Runs transporter.verify() at startup to surface auth issues immediately
-//   • Adds anti-spam headers (Reply-To, List-Unsubscribe, X-Mailer)
+//   • Full error diagnostics on failure
+//   • Startup verification of API key
 //
 // Required .env variables:
-//   GMAIL_USER=your-real-email@gmail.com
-//   GMAIL_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx   (16-char App Password from Google)
+//   RESEND_API_KEY=re_xxxxxxxxxxxx   (from https://resend.com/api-keys)
+//   GMAIL_USER=your-email@gmail.com  (used as reply-to address)
+//
+// Optional .env:
+//   RESEND_FROM=Ambience <noreply@yourdomain.com>  (requires verified domain)
+//   If not set, uses Resend's default onboarding address.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 
 // ── Read credentials from environment ────────────────────────────────────────
-const GMAIL_USER = process.env.GMAIL_USER;
-const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const GMAIL_USER = process.env.GMAIL_USER; // used as reply-to
+const RESEND_FROM =
+  process.env.RESEND_FROM || "Ambience <onboarding@resend.dev>";
 
 // ── Detect whether real credentials have been provided ───────────────────────
 const isConfigured =
-  GMAIL_USER &&
-  GMAIL_APP_PASSWORD &&
-  !GMAIL_USER.includes("your-") &&
-  !GMAIL_APP_PASSWORD.includes("xxxx");
+  RESEND_API_KEY &&
+  RESEND_API_KEY.startsWith("re_") &&
+  RESEND_API_KEY.length > 10;
 
-let transporter = null;
-let transporterVerified = false; // tracks verify() result
+let resend = null;
 
 if (isConfigured) {
-  // ────────────────────────────────────────────────────────────────────────────
-  // Gmail SMTP — Port 587 + STARTTLS (explicit)
-  //
-  // Render blocks outbound Port 465 (direct SMTPS → ETIMEDOUT).
-  // `service: 'gmail'` also maps to port 465 internally, so it won't work.
-  // Port 587 with secure:false triggers STARTTLS upgrade, which Render allows.
-  // ────────────────────────────────────────────────────────────────────────────
-  transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 587,
-    secure: false, // false = use STARTTLS upgrade (NOT plain text)
-    auth: {
-      user: GMAIL_USER,
-      pass: GMAIL_APP_PASSWORD,
-    },
-    // Timeouts — surface failures fast instead of hanging
-    connectionTimeout: 10000, // 10 s to establish TCP connection
-    greetingTimeout: 10000,   // 10 s for SMTP greeting
-    socketTimeout: 30000,     // 30 s for socket inactivity
-    // TLS — relaxed for Render's proxy/NAT layer
-    tls: {
-      rejectUnauthorized: false,
-    },
-  });
+  resend = new Resend(RESEND_API_KEY);
 
-  // ── Startup SMTP verification ──────────────────────────────────────────────
-  // Immediately test the connection so auth/network problems are surfaced at
-  // boot time, not when the first user hits "Send OTP".
-  transporter
-    .verify()
+  // ── Startup verification ───────────────────────────────────────────────────
+  // Send a test API call to verify the key is valid at boot time.
+  resend.apiKeys
+    .list()
     .then(() => {
-      transporterVerified = true;
       console.log("");
       console.log("┌──────────────────────────────────────────────────────────┐");
-      console.log("│  ✅  Gmail SMTP verified — email delivery is ACTIVE     │");
-      console.log(`│  Account: ${GMAIL_USER.padEnd(45)}│`);
-      console.log("│  Transport: smtp.gmail.com:587 (STARTTLS)              │");
+      console.log("│  ✅  Resend API verified — email delivery is ACTIVE     │");
+      console.log(`│  From: ${RESEND_FROM.padEnd(49)}│`);
+      console.log(`│  Reply-To: ${(GMAIL_USER || "not set").padEnd(45)}│`);
+      console.log("│  Transport: Resend HTTP API (port 443)                  │");
       console.log("└──────────────────────────────────────────────────────────┘");
       console.log("");
     })
     .catch((err) => {
-      transporterVerified = false;
       console.error("");
       console.error("╔══════════════════════════════════════════════════════════╗");
-      console.error("║  ❌  Gmail SMTP verification FAILED at startup          ║");
+      console.error("║  ❌  Resend API verification FAILED at startup          ║");
       console.error("╚══════════════════════════════════════════════════════════╝");
       console.error("");
-      console.error("  SMTP Error Details:");
-      console.error(`    message      : ${err.message}`);
-      console.error(`    code         : ${err.code || "N/A"}`);
-      console.error(`    command      : ${err.command || "N/A"}`);
-      console.error(`    response     : ${err.response || "N/A"}`);
-      console.error(`    responseCode : ${err.responseCode || "N/A"}`);
+      console.error("  Error Details:");
+      console.error(`    message : ${err.message}`);
+      console.error(`    name    : ${err.name || "N/A"}`);
       console.error("");
       console.error("  Troubleshooting:");
-      console.error("    1. Verify GMAIL_USER in .env is a real Gmail address");
-      console.error("    2. Verify GMAIL_APP_PASSWORD is a 16-char App Password");
-      console.error("       → Generate at: https://myaccount.google.com/apppasswords");
-      console.error("    3. Ensure 2-Step Verification is enabled on the Google account");
-      console.error("    4. Check firewall / antivirus is not blocking port 587");
+      console.error("    1. Verify RESEND_API_KEY starts with 're_'");
+      console.error("    2. Generate a key at: https://resend.com/api-keys");
+      console.error("    3. Add RESEND_API_KEY to Render Environment Variables");
       console.error("");
     });
 } else {
@@ -100,15 +77,17 @@ if (isConfigured) {
   console.log("");
   if (isProduction) {
     console.error("╔══════════════════════════════════════════════════════════╗");
-    console.error("║  🚨  PRODUCTION: Gmail credentials MISSING!              ║");
-    console.error("║  Emails WILL FAIL. Set GMAIL_USER + GMAIL_APP_PASSWORD   ║");
-    console.error("║  in Render Environment Variables immediately.            ║");
+    console.error("║  🚨  PRODUCTION: Resend API key MISSING!                ║");
+    console.error("║  Emails WILL FAIL. Set RESEND_API_KEY in Render         ║");
+    console.error("║  Environment Variables immediately.                     ║");
+    console.error("║                                                         ║");
+    console.error("║  Get your key at: https://resend.com/api-keys           ║");
     console.error("╚══════════════════════════════════════════════════════════╝");
   } else {
     console.log("┌──────────────────────────────────────────────────────────┐");
-    console.log("│  ⚠️  Gmail credentials not configured — DEV MODE        │");
+    console.log("│  ⚠️  Resend API key not configured — DEV MODE           │");
     console.log("│  OTP codes will be logged to the console only.          │");
-    console.log("│  Set GMAIL_USER + GMAIL_APP_PASSWORD in .env to enable. │");
+    console.log("│  Set RESEND_API_KEY in .env to enable email delivery.   │");
     console.log("└──────────────────────────────────────────────────────────┘");
   }
   console.log("");
@@ -121,10 +100,10 @@ if (isConfigured) {
 const isEmailConfigured = () => isConfigured;
 
 /**
- * Send an email via Gmail SMTP.
+ * Send an email via Resend HTTP API.
  *
- * In DEV MODE (no credentials), logs to console and returns null.
- * In PROD MODE, sends via Nodemailer and throws on failure so the
+ * In DEV MODE (no API key), logs to console and returns null.
+ * In PROD MODE, sends via Resend and throws on failure so the
  * caller can return a proper 500 to the frontend.
  *
  * @param {Object}  opts
@@ -133,7 +112,7 @@ const isEmailConfigured = () => isConfigured;
  * @param {string}  opts.html     — HTML body
  * @param {string}  [opts.text]   — Optional plain-text fallback
  * @param {string}  [opts.logLabel="Email"] — Label for console logs
- * @returns {Promise<Object|null>} Nodemailer info object, or null in dev mode
+ * @returns {Promise<Object|null>} Resend response object, or null in dev mode
  */
 const sendEmail = async ({ to, subject, html, text, logLabel = "Email" }) => {
   // ── GUARD: Validate recipient before doing anything ────────────────────────
@@ -143,35 +122,52 @@ const sendEmail = async ({ to, subject, html, text, logLabel = "Email" }) => {
     throw new Error("Invalid recipient email address.");
   }
 
-  // ── PROD MODE — real SMTP delivery ─────────────────────────────────────────
-  if (isEmailConfigured() && transporter) {
+  // ── PROD MODE — real email delivery via Resend ─────────────────────────────
+  if (isEmailConfigured() && resend) {
     try {
-      const info = await transporter.sendMail({
-        from: `"Ambience" <${GMAIL_USER}>`,
-        to,
-        replyTo: GMAIL_USER, // helps pass spam filters
+      const payload = {
+        from: RESEND_FROM,
+        to: [to],
         subject,
         html,
         // Plain-text fallback — critical for spam filters.
         // If the caller didn't provide one, auto-strip HTML tags.
         text: text || stripHtml(html),
-        // ── Anti-spam / deliverability headers ─────────────────────────────
-        headers: {
-          "X-Mailer": "Ambience/1.0",
-          Precedence: "bulk",
-          "List-Unsubscribe": `<mailto:${GMAIL_USER}?subject=unsubscribe>`,
-        },
-      });
+      };
+
+      // Add reply-to if GMAIL_USER is configured
+      if (GMAIL_USER) {
+        payload.reply_to = GMAIL_USER;
+      }
+
+      const { data, error } = await resend.emails.send(payload);
+
+      if (error) {
+        console.error("");
+        console.error(`[AMBIENCE] ❌ ${logLabel} SEND FAILED (Resend API error)`);
+        console.error("─".repeat(60));
+        console.error(`  To           : ${to}`);
+        console.error(`  Subject      : ${subject}`);
+        console.error(`  Error Name   : ${error.name || "N/A"}`);
+        console.error(`  Error Message: ${error.message || JSON.stringify(error)}`);
+        console.error("─".repeat(60));
+        console.error("");
+        throw new Error(error.message || "Resend API error");
+      }
 
       console.log(
         `[AMBIENCE] ✉️  ${logLabel} sent successfully` +
           ` | To: ${to}` +
-          ` | MessageID: ${info.messageId}` +
-          ` | Response: ${info.response}`
+          ` | ID: ${data?.id || "N/A"}`
       );
-      return info;
+      return data;
     } catch (error) {
-      // ── FULL SMTP error diagnostics — never swallow silently ────────────
+      // If it's already our formatted error from above, just re-throw
+      if (error.message?.includes("Resend API error")) {
+        throw error;
+      }
+
+      // ── Network / unexpected errors ────────────────────────────────────
       console.error("");
       console.error(`[AMBIENCE] ❌ ${logLabel} SEND FAILED`);
       console.error("─".repeat(60));
@@ -179,9 +175,6 @@ const sendEmail = async ({ to, subject, html, text, logLabel = "Email" }) => {
       console.error(`  Subject      : ${subject}`);
       console.error(`  Error Message: ${error.message}`);
       console.error(`  Error Code   : ${error.code || "N/A"}`);
-      console.error(`  SMTP Command : ${error.command || "N/A"}`);
-      console.error(`  SMTP Response: ${error.response || "N/A"}`);
-      console.error(`  Response Code: ${error.responseCode || "N/A"}`);
       console.error("─".repeat(60));
       console.error("");
 
@@ -196,7 +189,7 @@ const sendEmail = async ({ to, subject, html, text, logLabel = "Email" }) => {
     // In production, missing credentials is a FATAL configuration error.
     // Do NOT silently succeed — throw so the controller returns 500.
     const msg =
-      "[AMBIENCE] 🚨 PRODUCTION EMAIL FAILURE — GMAIL_USER or GMAIL_APP_PASSWORD " +
+      "[AMBIENCE] 🚨 PRODUCTION EMAIL FAILURE — RESEND_API_KEY " +
       "is not set in Render Environment Variables. Email cannot be sent.";
     console.error(msg);
     throw new Error("Email service is not configured. Contact support.");
@@ -208,7 +201,7 @@ const sendEmail = async ({ to, subject, html, text, logLabel = "Email" }) => {
   console.log(`│  📧  AMBIENCE ${logLabel} — DEV MODE`.padEnd(58) + "│");
   console.log(`│  To:      ${to}`.padEnd(58) + "│");
   console.log(`│  Subject: ${subject}`.padEnd(58) + "│");
-  console.log("│  (Set GMAIL_USER / GMAIL_APP_PASSWORD for real delivery)│");
+  console.log("│  (Set RESEND_API_KEY in .env for real email delivery)  │");
   console.log("└─────────────────────────────────────────────────────────┘");
   console.log("");
   return null;
