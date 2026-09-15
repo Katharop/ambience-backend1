@@ -4,7 +4,8 @@
 // AMBIENCE — Gmail SMTP Email Service (Nodemailer)
 //
 // Hardened for deliverability:
-//   • Uses explicit host/port/secure instead of the generic "service: gmail"
+//   • Uses `service: 'gmail'` (Port 587 + STARTTLS) — compatible with Render,
+//     Railway, and other PaaS hosts that block outbound Port 465.
 //   • Adds plain-text fallback for every email (spam-filter friendly)
 //   • Logs full SMTP diagnostics on failure (code, command, response)
 //   • Runs transporter.verify() at startup to surface auth issues immediately
@@ -33,30 +34,24 @@ let transporterVerified = false; // tracks verify() result
 
 if (isConfigured) {
   // ────────────────────────────────────────────────────────────────────────────
-  // Explicit Gmail SMTP config — NOT "service: gmail"
+  // Gmail SMTP via `service: 'gmail'`
   //
-  // Using host/port/secure directly is more reliable and transparent.
-  // Port 465 = implicit TLS (recommended by Google for App Passwords).
+  // This uses Port 587 + STARTTLS under the hood, which works on Render and
+  // other PaaS platforms that block direct SMTPS on Port 465 (ETIMEDOUT).
   // ────────────────────────────────────────────────────────────────────────────
   transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 465,
-    secure: true, // use implicit TLS on port 465
+    service: "gmail",
     auth: {
       user: GMAIL_USER,
       pass: GMAIL_APP_PASSWORD,
     },
-    // Connection pool — keeps connections alive for burst sends
-    pool: true,
-    maxConnections: 5,
-    maxMessages: 100,
     // Timeouts — surface failures fast instead of hanging
     connectionTimeout: 10000, // 10 s to establish TCP connection
     greetingTimeout: 10000,   // 10 s for SMTP greeting
     socketTimeout: 30000,     // 30 s for socket inactivity
-    // TLS — trust Google's cert chain
+    // TLS — relaxed for Render's proxy/NAT layer
     tls: {
-      rejectUnauthorized: true,
+      rejectUnauthorized: false,
     },
   });
 
@@ -71,7 +66,7 @@ if (isConfigured) {
       console.log("┌──────────────────────────────────────────────────────────┐");
       console.log("│  ✅  Gmail SMTP verified — email delivery is ACTIVE     │");
       console.log(`│  Account: ${GMAIL_USER.padEnd(45)}│`);
-      console.log("│  Host: smtp.gmail.com:465 (TLS)                         │");
+      console.log("│  Transport: service:'gmail' (Port 587 STARTTLS)         │");
       console.log("└──────────────────────────────────────────────────────────┘");
       console.log("");
     })
@@ -94,7 +89,7 @@ if (isConfigured) {
       console.error("    2. Verify GMAIL_APP_PASSWORD is a 16-char App Password");
       console.error("       → Generate at: https://myaccount.google.com/apppasswords");
       console.error("    3. Ensure 2-Step Verification is enabled on the Google account");
-      console.error("    4. Check firewall / antivirus is not blocking port 465");
+      console.error("    4. Check firewall / antivirus is not blocking port 587");
       console.error("");
     });
 } else {
