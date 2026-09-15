@@ -98,12 +98,21 @@ if (isConfigured) {
       console.error("");
     });
 } else {
+  const isProduction = process.env.NODE_ENV === "production";
   console.log("");
-  console.log("┌──────────────────────────────────────────────────────────┐");
-  console.log("│  ⚠️  Gmail credentials not configured — DEV MODE        │");
-  console.log("│  OTP codes will be logged to the console only.          │");
-  console.log("│  Set GMAIL_USER + GMAIL_APP_PASSWORD in .env to enable. │");
-  console.log("└──────────────────────────────────────────────────────────┘");
+  if (isProduction) {
+    console.error("╔══════════════════════════════════════════════════════════╗");
+    console.error("║  🚨  PRODUCTION: Gmail credentials MISSING!              ║");
+    console.error("║  Emails WILL FAIL. Set GMAIL_USER + GMAIL_APP_PASSWORD   ║");
+    console.error("║  in Render Environment Variables immediately.            ║");
+    console.error("╚══════════════════════════════════════════════════════════╝");
+  } else {
+    console.log("┌──────────────────────────────────────────────────────────┐");
+    console.log("│  ⚠️  Gmail credentials not configured — DEV MODE        │");
+    console.log("│  OTP codes will be logged to the console only.          │");
+    console.log("│  Set GMAIL_USER + GMAIL_APP_PASSWORD in .env to enable. │");
+    console.log("└──────────────────────────────────────────────────────────┘");
+  }
   console.log("");
 }
 
@@ -129,6 +138,13 @@ const isEmailConfigured = () => isConfigured;
  * @returns {Promise<Object|null>} Nodemailer info object, or null in dev mode
  */
 const sendEmail = async ({ to, subject, html, text, logLabel = "Email" }) => {
+  // ── GUARD: Validate recipient before doing anything ────────────────────────
+  if (!to || typeof to !== "string" || !to.includes("@")) {
+    const msg = `[AMBIENCE] ❌ ${logLabel} BLOCKED — invalid recipient: "${to}"`;
+    console.error(msg);
+    throw new Error("Invalid recipient email address.");
+  }
+
   // ── PROD MODE — real SMTP delivery ─────────────────────────────────────────
   if (isEmailConfigured() && transporter) {
     try {
@@ -174,6 +190,18 @@ const sendEmail = async ({ to, subject, html, text, logLabel = "Email" }) => {
       // Re-throw so the controller can return 500 to the frontend
       throw error;
     }
+  }
+
+  // ── NO CREDENTIALS — Production vs Dev handling ────────────────────────────
+  const isProduction = process.env.NODE_ENV === "production";
+  if (isProduction) {
+    // In production, missing credentials is a FATAL configuration error.
+    // Do NOT silently succeed — throw so the controller returns 500.
+    const msg =
+      "[AMBIENCE] 🚨 PRODUCTION EMAIL FAILURE — GMAIL_USER or GMAIL_APP_PASSWORD " +
+      "is not set in Render Environment Variables. Email cannot be sent.";
+    console.error(msg);
+    throw new Error("Email service is not configured. Contact support.");
   }
 
   // ── DEV MODE — console logging only ────────────────────────────────────────

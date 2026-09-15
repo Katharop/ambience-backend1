@@ -226,18 +226,33 @@ app.use(cookieParser());
 
 // ── CORS — Strict origin whitelist with credentials ─────────────────────────
 // Origins configurable via ALLOWED_ORIGINS env var (comma-separated)
+// Also supports FRONTEND_URL as a single primary origin override.
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
-  : ["http://localhost:3000", "https://ambienced.netlify.app", "https://ambience-fronten.vercel.app"];
+  : [
+      "http://localhost:3000",
+      "https://ambience.vercel.app",
+      "https://ambience-fronten.vercel.app",
+      "https://ambienced.netlify.app",
+    ];
+
+// If FRONTEND_URL is set (e.g. in Render env vars), add it to the whitelist
+if (process.env.FRONTEND_URL && !ALLOWED_ORIGINS.includes(process.env.FRONTEND_URL)) {
+  ALLOWED_ORIGINS.push(process.env.FRONTEND_URL);
+}
+
+console.log(`[AMBIENCE] CORS allowed origins: ${ALLOWED_ORIGINS.join(", ")}`);
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.warn(`[CORS] Blocked request from unauthorized origin: ${origin}`);
-      callback(new Error("Not allowed by CORS"));
-    }
+    // Allow requests with no origin (mobile apps, curl, server-to-server)
+    if (!origin) return callback(null, true);
+    // Exact match against whitelist
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    // Allow Vercel preview deployments (ambience-*.vercel.app)
+    if (/^https:\/\/ambience[a-z0-9-]*\.vercel\.app$/.test(origin)) return callback(null, true);
+    console.warn(`[CORS] Blocked request from unauthorized origin: ${origin}`);
+    callback(new Error("Not allowed by CORS"));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -245,6 +260,7 @@ app.use(cors({
   exposedHeaders: ["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
   maxAge: 86400,
 }));
+
 
 // ── JSON body parser ────────────────────────────────────────────────────────
 app.use(express.json({ limit: "1mb" }));
