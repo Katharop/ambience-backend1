@@ -34,13 +34,16 @@ let transporterVerified = false; // tracks verify() result
 
 if (isConfigured) {
   // ────────────────────────────────────────────────────────────────────────────
-  // Gmail SMTP via `service: 'gmail'`
+  // Gmail SMTP — Port 587 + STARTTLS (explicit)
   //
-  // This uses Port 587 + STARTTLS under the hood, which works on Render and
-  // other PaaS platforms that block direct SMTPS on Port 465 (ETIMEDOUT).
+  // Render blocks outbound Port 465 (direct SMTPS → ETIMEDOUT).
+  // `service: 'gmail'` also maps to port 465 internally, so it won't work.
+  // Port 587 with secure:false triggers STARTTLS upgrade, which Render allows.
   // ────────────────────────────────────────────────────────────────────────────
   transporter = nodemailer.createTransport({
-    service: "gmail",
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false, // false = use STARTTLS upgrade (NOT plain text)
     auth: {
       user: GMAIL_USER,
       pass: GMAIL_APP_PASSWORD,
@@ -66,7 +69,7 @@ if (isConfigured) {
       console.log("┌──────────────────────────────────────────────────────────┐");
       console.log("│  ✅  Gmail SMTP verified — email delivery is ACTIVE     │");
       console.log(`│  Account: ${GMAIL_USER.padEnd(45)}│`);
-      console.log("│  Transport: service:'gmail' (Port 587 STARTTLS)         │");
+      console.log("│  Transport: smtp.gmail.com:587 (STARTTLS)              │");
       console.log("└──────────────────────────────────────────────────────────┘");
       console.log("");
     })
