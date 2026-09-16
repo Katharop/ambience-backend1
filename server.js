@@ -53,6 +53,9 @@ const { restrictTo }            = require("./middleware/authMiddleware");
 const paymentController = require("./controllers/paymentController");
 const { handleWebhook }   = require("./controllers/webhookController");
 
+// ── AI Assistant imports ────────────────────────────────────────────────────
+const aiAssistantController = require("./controllers/aiAssistant");
+
 // ── Enterprise security middleware ──────────────────────────────────────────
 const cookieParser        = require("cookie-parser");
 const mongoSanitize       = require("express-mongo-sanitize");
@@ -358,6 +361,14 @@ const paymentLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: "Too many payment requests. Please try again after 15 minutes." },
+});
+
+const aiChatLimiter = rateLimit({
+  windowMs: 60000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: "Too many AI chat requests. Please slow down." },
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -690,6 +701,10 @@ app.put("/api/users/2fa", protect, async (req, res) => {
     res.status(500).json({ success: false, error: "Failed to update 2FA settings" });
   }
 });
+
+// ── AI Assistant Routes ─────────────────────────────────────────────────────
+app.post("/api/ai/chat", aiChatLimiter, protect, aiAssistantController.chat);
+app.post("/api/ai/tts", aiAssistantController.getTTSConfig);
 
 // ── Create Support Ticket ───────────────────────────────────────────────────
 app.post("/api/support", protect, async (req, res) => {
