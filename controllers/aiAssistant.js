@@ -1,28 +1,12 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const axios = require('axios');
 const Product = require('../models/Product');
 const Order = require('../models/Order');
 const User = require('../models/User');
-
-// Initialize Gemini
-// Fallback if GEMINI_API_KEY is not set is handled in the controller methods
-let genAI = null;
-if (process.env.GEMINI_API_KEY) {
-  genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-}
+const localNLP = require('./localNLP');
 
 exports.chat = async (req, res) => {
   try {
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(503).json({
-        success: false,
-        error: "AI service is currently unavailable (API key not configured)."
-      });
-    }
-
-    if (!genAI) {
-      genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    }
-
     const { message, conversationHistory = [], currentPage, cartItems = [] } = req.body;
     if (!message) {
       return res.status(400).json({ success: false, error: "Message is required." });
@@ -36,7 +20,6 @@ exports.chat = async (req, res) => {
       .lean();
 
     // Determine if query is product-related to fetch catalog
-    // We fetch a lightweight catalog of live products to pass to the model
     const productKeywords = ['product', 'shop', 'buy', 'price', 'recommend', 'show', 'compare', 'looking for', 'shirt', 'shoe', 'watch', 'bag'];
     const isProductQuery = productKeywords.some(keyword => message.toLowerCase().includes(keyword));
     
@@ -53,9 +36,10 @@ exports.chat = async (req, res) => {
 Your capabilities: product search, recommendations, comparisons, order tracking, cart management, and navigation.
 CRITICAL RULES:
 1. ONLY access and reference the authenticated user's own data (provided in the context below).
-2. Respond in the same language the user speaks.
-3. Be warm, knowledgeable, proactive, and maintain a premium, luxury tone.
-4. You MUST return your response as a valid JSON object EXACTLY matching this structure:
+2. Respond in the SAME language the user speaks. If they speak Malayalam, respond in Malayalam. If Hindi, respond in Hindi.
+3. You understand and speak Malayalam (Kerala language) fluently.
+4. Be warm, knowledgeable, proactive, and maintain a premium, luxury tone.
+5. You MUST return your response as a valid JSON object EXACTLY matching this structure:
 {
   "text": "Your natural language response here",
   "actions": [
@@ -76,53 +60,44 @@ Current Page: ${currentPage || 'unknown'}
 ${catalogContext}
 `;
 
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash",
-      systemInstruction: systemPrompt,
-      generationConfig: {
-        responseMimeType: "application/json",
-      }
-    });
-
-    // Format history for Gemini
-    const formattedHistory = conversationHistory.map(msg => ({
-      role: msg.role === 'user' ? 'user' : 'model',
-      parts: [{ text: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content) }]
-    }));
-
-    const chatSession = model.startChat({
-      history: formattedHistory,
-    });
-
-    const result = await chatSession.sendMessage(message);
-    const responseText = result.response.text();
-    
-    let parsedResponse;
-    try {
-      parsedResponse = JSON.parse(responseText);
-    } catch (e) {
-      console.error("[Ambience AI] Failed to parse JSON from Gemini:", responseText);
-      // Fallback response if JSON parsing fails
-      parsedResponse = {
-        text: responseText,
-        actions: [],
-        emotion: "neutral",
-        suggestedProducts: []
-      };
+    // Tier 1: Try Local NLP first
+    const localResult = await localNLP.processLocally(message, user, recentOrders);
+    if (localResult) {
+      console.log('[Ambience AI] ⚡ Handled locally (0ms, $0)');
+      return res.json({ success: true, response: localResult });
     }
 
-    console.log(`[Ambience AI] 🤖 Chat processed for user ${user.email}`);
-    
-    return res.status(200).json({
-      success: true,
-      response: {
-        text: parsedResponse.text || "",
-        actions: Array.isArray(parsedResponse.actions) ? parsedResponse.actions : [],
-        emotion: parsedResponse.emotion || "neutral",
-        suggestedProducts: Array.isArray(parsedResponse.suggestedProducts) ? parsedResponse.suggestedProducts : [],
-        language: "auto" // Could be enhanced to detect language
-      }
-    });
+    // Format history common for LLMs
+    const formattedHistory = conversationHistory.map(msg => ({
+      role: msg.role === 'user' ? 'user' : 'assistant',
+      content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+    }));
+
+    // Tier 2: Try Groq Cloud (Llama 3.3 70B)
+    const groqResult = await tryGroq(systemPrompt, message, formattedHistory);
+    if (groqResult) {
+      console.log('[Ambience AI] 🚀 Handled by Groq (Llama 3.3 70B)');
+      return res.json({ success: true, response: groqResult });
+    }
+
+    // Tier 3: Try Gemini Flash
+    const geminiResult = await tryGemini(systemPrompt, message, formattedHistory);
+    if (geminiResult) {
+      console.log('[Ambience AI] 🤖 Handled by Gemini Flash');
+      return res.json({ success: true, response: geminiResult });
+    }
+
+    // Tier 4: Try Cloudflare Workers AI
+    const cfResult = await tryCloudflare(systemPrompt, message, formattedHistory);
+    if (cfResult) {
+      console.log('[Ambience AI] ☁️ Handled by Cloudflare Workers AI');
+      return res.json({ success: true, response: cfResult });
+    }
+
+    // Tier 5: Final fallback
+    console.log('[Ambience AI] ⚠️ All APIs failed, using fallback.');
+    const fallback = localNLP.getFallbackResponse(message, 'english');
+    return res.json({ success: true, response: fallback });
 
   } catch (error) {
     console.error("[Ambience AI] Chat error:", error);
@@ -133,6 +108,97 @@ ${catalogContext}
   }
 };
 
+async function tryGroq(systemPrompt, message, history) {
+  try {
+    if (!process.env.GROQ_API_KEY) return null;
+    
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...history,
+      { role: 'user', content: message }
+    ];
+
+    const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
+      model: 'llama-3.3-70b-versatile',
+      messages,
+      response_format: { type: 'json_object' }
+    }, {
+      headers: {
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 5000
+    });
+
+    const content = response.data.choices[0].message.content;
+    return JSON.parse(content);
+  } catch (err) {
+    console.error("[Groq Fallback Error]", err.message);
+    return null;
+  }
+}
+
+async function tryGemini(systemPrompt, message, history) {
+  try {
+    if (!process.env.GEMINI_API_KEY) return null;
+    
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash",
+      systemInstruction: systemPrompt,
+      generationConfig: { responseMimeType: "application/json" }
+    });
+
+    const geminiHistory = history.map(msg => ({
+      role: msg.role === 'user' ? 'user' : 'model',
+      parts: [{ text: msg.content }]
+    }));
+
+    const chatSession = model.startChat({ history: geminiHistory });
+    const result = await chatSession.sendMessage(message);
+    return JSON.parse(result.response.text());
+  } catch (err) {
+    console.error("[Gemini Fallback Error]", err.message);
+    return null;
+  }
+}
+
+async function tryCloudflare(systemPrompt, message, history) {
+  try {
+    if (!process.env.CLOUDFLARE_ACCOUNT_ID || !process.env.CLOUDFLARE_AI_TOKEN) return null;
+    
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...history,
+      { role: 'user', content: message }
+    ];
+
+    const response = await axios.post(
+      `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`,
+      { messages },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.CLOUDFLARE_AI_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 5000
+      }
+    );
+
+    let content = response.data.result.response;
+    
+    // Cloudflare might wrap in markdown blocks, cleanup:
+    if (content.includes('```json')) {
+      content = content.split('```json')[1].split('```')[0].trim();
+    }
+    
+    return JSON.parse(content);
+  } catch (err) {
+    console.error("[Cloudflare Fallback Error]", err.message);
+    return null;
+  }
+}
+
 exports.getTTSConfig = async (req, res) => {
   try {
     const { text, lang = 'en-US', voiceProfile = 'neutral', speed = 1.0, pitch = 1.0 } = req.body;
@@ -141,7 +207,6 @@ exports.getTTSConfig = async (req, res) => {
       return res.status(400).json({ success: false, error: "Text is required for TTS." });
     }
 
-    // Determine voice configuration based on profile
     let rate = speed;
     let finalPitch = pitch;
     let preferredVoiceKeywords = [];
@@ -171,13 +236,7 @@ exports.getTTSConfig = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      voiceConfig: {
-        lang,
-        rate,
-        pitch: finalPitch,
-        volume: 1.0,
-        preferredVoiceKeywords
-      }
+      voiceConfig: { lang, rate, pitch: finalPitch, volume: 1.0, preferredVoiceKeywords }
     });
   } catch (error) {
     console.error("[Ambience AI] TTS config error:", error);
