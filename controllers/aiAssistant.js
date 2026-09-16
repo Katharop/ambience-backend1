@@ -7,7 +7,7 @@ const localNLP = require('./localNLP');
 
 exports.chat = async (req, res) => {
   try {
-    const { message, conversationHistory = [], currentPage, cartItems = [] } = req.body;
+    const { message, conversationHistory = [], currentPage, cartItems = [], language, personality, character } = req.body;
     if (!message) {
       return res.status(400).json({ success: false, error: "Message is required." });
     }
@@ -32,28 +32,39 @@ exports.chat = async (req, res) => {
       catalogContext = `\n\nLive Product Catalog (Top 20 items):\n${JSON.stringify(products)}`;
     }
 
-    const systemPrompt = `You are 'Ambience AI' — a premium shopping assistant for the Ambience luxury e-commerce platform.
-Your capabilities: product search, recommendations, comparisons, order tracking, cart management, and navigation.
-CRITICAL RULES:
-1. ONLY access and reference the authenticated user's own data (provided in the context below).
-2. Respond in the SAME language the user speaks. If they speak Malayalam, respond in Malayalam. If Hindi, respond in Hindi.
-3. You understand and speak Malayalam (Kerala language) fluently.
-4. Be warm, knowledgeable, proactive, and maintain a premium, luxury tone.
-5. You MUST return your response as a valid JSON object EXACTLY matching this structure:
+    const systemPrompt = `You are 'Ambience AI' — a premium shopping concierge for the Ambience luxury e-commerce platform.
+
+INTERACTION RULES:
+1. ALWAYS respond in the SAME language the user speaks. If Tamil → respond in Tamil. Malayalam → Malayalam. Hindi → Hindi. English → English. Detect the language from the user's message.
+2. You speak Malayalam (Kerala), Tamil, Hindi, Hinglish, and English fluently and naturally.
+3. Keep responses CONCISE — maximum 2-3 short sentences. Your text is read aloud via text-to-speech, so avoid long paragraphs, bullet lists, or technical jargon.
+4. ASK follow-up questions to understand exactly what the user wants before showing products:
+   - If they ask for "a laptop", ask: "What's your budget? Any brand preference?"
+   - If they ask for "shoes", ask: "For men or women? Casual or formal?"
+   - If they ask for "a gift", ask: "Who is it for? What's the occasion?"
+   - Do NOT dump all products at once — have a natural conversation first.
+5. Be warm, personal, and human-like. Use the user's name when you know it. Sound like a knowledgeable friend, not a corporate bot.
+6. When recommending products, briefly explain WHY each one suits the user's needs.
+7. ONLY access the authenticated user's data provided below.
+8. User's preferred language: ${language || 'en-US'}
+9. User's selected character: ${character || 'boy'}
+10. Personality: ${personality ? JSON.stringify(personality) : 'default'}
+
+RESPONSE FORMAT (strict JSON — no markdown, no extra text outside this JSON):
 {
-  "text": "Your natural language response here",
+  "text": "Your concise, natural response here",
   "actions": [
     { "type": "NAVIGATE", "path": "/product/xxx" },
     { "type": "ADD_TO_CART", "productId": "xxx" },
-    { "type": "SHOW_PRODUCTS", "products": ["productId1", "productId2"] }
+    { "type": "SHOW_PRODUCTS", "products": ["id1", "id2"] }
   ],
   "emotion": "happy|thinking|excited|neutral|empathetic",
-  "suggestedProducts": ["productId1", "productId2"]
+  "suggestedProducts": [],
+  "language": "detected-language-code"
 }
-(The actions and suggestedProducts arrays can be empty if not applicable).
 
 --- USER CONTEXT ---
-User Profile: ${JSON.stringify(user)}
+User: ${user ? user.name || 'Guest' : 'Guest'}
 Recent Orders: ${JSON.stringify(recentOrders)}
 Current Cart: ${JSON.stringify(cartItems)}
 Current Page: ${currentPage || 'unknown'}
@@ -61,7 +72,7 @@ ${catalogContext}
 `;
 
     // Tier 1: Try Local NLP first
-    const localResult = await localNLP.processLocally(message, user, recentOrders);
+    const localResult = await localNLP.processLocally(message, user, recentOrders, conversationHistory);
     if (localResult) {
       console.log('[Ambience AI] ⚡ Handled locally (0ms, $0)');
       return res.json({ success: true, response: localResult });
@@ -96,7 +107,8 @@ ${catalogContext}
 
     // Tier 5: Final fallback
     console.log('[Ambience AI] ⚠️ All APIs failed, using fallback.');
-    const fallback = localNLP.getFallbackResponse(message, 'english');
+    const detectedLang = localNLP.detectLanguage(message);
+    const fallback = localNLP.getFallbackResponse(message, detectedLang);
     return res.json({ success: true, response: fallback });
 
   } catch (error) {

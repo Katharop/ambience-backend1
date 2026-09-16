@@ -124,13 +124,13 @@ const responses = {
     FAQ_PAYMENT: "நாங்கள் COD, UPI, Cards மற்றும் Net Banking ஐ ஏற்கிறோம்.",
     FAQ_CONTACT: "support@ambience.com இல் எங்களைத் தொடர்பு கொள்ளலாம்.",
     ORDER_FOUND: "உங்கள் சமீபத்திய ஆர்டர் நிலை இதோ.",
-    ORDER_NOT_FOUND: "உங்களுக்கான சமீபத்திய ஆர்டர்கள் எதையும் என்னால் கண்டுபிடிக்க முடியவில்லை.",
+    ORDER_NOT_FOUND: "மன்னிக்கவும், சமீபத்திய ஆர்டர்கள் எதுவும் கிடைக்கவில்லை.",
     PRODUCT_FOUND: "நீங்கள் விரும்பக்கூடிய சில தயாரிப்புகள் இங்கே.",
     PRODUCT_NOT_FOUND: "மன்னிக்கவும், உங்கள் தேடலுக்குப் பொருந்தும் தயாரிப்புகள் எதுவும் இல்லை."
   }
 };
 
-exports.processLocally = async (message, user, recentOrders) => {
+exports.processLocally = async (message, user, recentOrders, conversationHistory = []) => {
   try {
     const text = message.toLowerCase();
     const lang = detectLanguage(message);
@@ -242,3 +242,5 @@ exports.getFallbackResponse = (message, lang) => {
     handledLocally: true
   };
 };
+
+exports.detectLanguage = detectLanguage;
