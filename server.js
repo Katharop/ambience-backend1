@@ -46,7 +46,7 @@ const multer     = require("multer");
 
 // ── Auth system imports ─────────────────────────────────────────────────────
 const authController = require("./controllers/auth");
-const { protect, requireAdmin } = require("./middleware/auth");
+const { protect, optionalAuth, requireAdmin } = require("./middleware/auth");
 const { restrictTo }            = require("./middleware/authMiddleware");
 
 // ── Payment system imports ──────────────────────────────────────────────────
@@ -703,7 +703,7 @@ app.put("/api/users/2fa", protect, async (req, res) => {
 });
 
 // ── AI Assistant Routes ─────────────────────────────────────────────────────
-app.post("/api/ai/chat", aiChatLimiter, protect, aiAssistantController.chat);
+app.post("/api/ai/chat", aiChatLimiter, optionalAuth, aiAssistantController.chat);
 app.post("/api/ai/tts", aiAssistantController.getTTSConfig);
 
 // ── Create Support Ticket ───────────────────────────────────────────────────
