@@ -148,6 +148,8 @@ exports.processLocally = async (message, user, recentOrders, conversationHistory
       handledLocally: true
     };
 
+    // ONLY handle trivial social intents locally.
+    // ALL product queries, FAQs, orders, and complex natural language go to LLM.
     if (intent === 'GREETING') {
       responseTemplate.text = langResponses.GREETING;
       responseTemplate.emotion = "happy";
@@ -165,64 +167,8 @@ exports.processLocally = async (message, user, recentOrders, conversationHistory
       return responseTemplate;
     }
 
-    if (intent === 'HELP') {
-      responseTemplate.text = langResponses.HELP;
-      return responseTemplate;
-    }
-
-    if (intent === 'FAQ') {
-      if (text.includes('return') || text.includes('refund')) {
-        responseTemplate.text = langResponses.FAQ_RETURN;
-      } else if (text.includes('shipping') || text.includes('delivery')) {
-        responseTemplate.text = langResponses.FAQ_SHIPPING;
-      } else if (text.includes('payment') || text.includes('pay')) {
-        responseTemplate.text = langResponses.FAQ_PAYMENT;
-      } else if (text.includes('contact') || text.includes('support')) {
-        responseTemplate.text = langResponses.FAQ_CONTACT;
-      } else {
-        return null; // Let LLM handle complex FAQs
-      }
-      return responseTemplate;
-    }
-
-    if (intent === 'ORDER_STATUS') {
-      if (recentOrders && recentOrders.length > 0) {
-        responseTemplate.text = langResponses.ORDER_FOUND;
-        responseTemplate.actions = [{ type: 'NAVIGATE', path: `/order/${recentOrders[0].orderId}` }];
-      } else {
-        responseTemplate.text = langResponses.ORDER_NOT_FOUND;
-        responseTemplate.emotion = "empathetic";
-      }
-      return responseTemplate;
-    }
-
-    if (intent === 'PRODUCT_SEARCH' || intent === 'PRICE_FILTER') {
-      const entities = extractEntities(text);
-      
-      const query = { status: 'live' };
-      if (entities.category) query.category = new RegExp(entities.category, 'i');
-      if (entities.gender) query.category = new RegExp(entities.gender, 'i'); // Simple mapped assumption
-      if (entities.maxPrice) query.dealPrice = { $lte: entities.maxPrice };
-
-      // If we didn't extract any meaningful entities, let LLM handle it
-      if (!entities.category && !entities.gender && !entities.maxPrice && !entities.color) {
-        return null; 
-      }
-
-      const products = await Product.find(query).limit(5).lean();
-      
-      if (products.length > 0) {
-        responseTemplate.text = langResponses.PRODUCT_FOUND;
-        responseTemplate.suggestedProducts = products.map(p => p._id.toString());
-        responseTemplate.actions = [{ type: 'SHOW_PRODUCTS', products: products.map(p => p._id.toString()) }];
-      } else {
-        responseTemplate.text = langResponses.PRODUCT_NOT_FOUND;
-        responseTemplate.emotion = "empathetic";
-      }
-      return responseTemplate;
-    }
-
-    // Unhandled intent or complex queries fallback to LLM
+    // Everything else (PRODUCT_SEARCH, ORDER_STATUS, FAQ, HELP, PRICE_FILTER, etc.)
+    // goes to the LLM waterfall for intelligent, conversational handling.
     return null;
 
   } catch (error) {

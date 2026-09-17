@@ -19,9 +19,21 @@ exports.chat = async (req, res) => {
       .limit(3)
       .lean();
 
-    // Determine if query is product-related to fetch catalog
-    const productKeywords = ['product', 'shop', 'buy', 'price', 'recommend', 'show', 'compare', 'looking for', 'shirt', 'shoe', 'watch', 'bag'];
-    const isProductQuery = productKeywords.some(keyword => message.toLowerCase().includes(keyword));
+    // Determine if query is product-related — includes Tamil, Malayalam, Hindi keywords
+    const productKeywords = [
+      // English
+      'product', 'shop', 'buy', 'price', 'recommend', 'show', 'compare', 'looking for',
+      'shirt', 'shoe', 'watch', 'bag', 'laptop', 'phone', 'dress', 'jacket', 'perfume',
+      'cosmetic', 'electronics', 'i want', 'i need', 'find me', 'get me',
+      // Tamil
+      'வேணும்', 'காட்டு', 'தேவை', 'கொடு', 'லேப்டாப்', 'ஃபோன்', 'ஷூ', 'பை',
+      // Malayalam
+      'കാണിക്കൂ', 'വേണം', 'തരൂ', 'ലാപ്ടോപ്പ്', 'ഫോൺ', 'ഷൂ',
+      // Hindi
+      'दिखाओ', 'चाहिए', 'लैपटॉप', 'फोन', 'जूता', 'खरीदना'
+    ];
+    const lowerMsg = message.toLowerCase();
+    const isProductQuery = productKeywords.some(kw => lowerMsg.includes(kw));
     
     let catalogContext = '';
     if (isProductQuery) {
@@ -32,39 +44,46 @@ exports.chat = async (req, res) => {
       catalogContext = `\n\nLive Product Catalog (Top 20 items):\n${JSON.stringify(products)}`;
     }
 
-    const systemPrompt = `You are 'Ambience AI' — a premium shopping concierge for the Ambience luxury e-commerce platform.
+    const userName = user ? (user.name || 'there') : 'there';
 
-INTERACTION RULES:
-1. ALWAYS respond in the SAME language the user speaks. If Tamil → respond in Tamil. Malayalam → Malayalam. Hindi → Hindi. English → English. Detect the language from the user's message.
-2. You speak Malayalam (Kerala), Tamil, Hindi, Hinglish, and English fluently and naturally.
-3. Keep responses CONCISE — maximum 2-3 short sentences. Your text is read aloud via text-to-speech, so avoid long paragraphs, bullet lists, or technical jargon.
-4. ASK follow-up questions to understand exactly what the user wants before showing products:
-   - If they ask for "a laptop", ask: "What's your budget? Any brand preference?"
-   - If they ask for "shoes", ask: "For men or women? Casual or formal?"
-   - If they ask for "a gift", ask: "Who is it for? What's the occasion?"
-   - Do NOT dump all products at once — have a natural conversation first.
-5. Be warm, personal, and human-like. Use the user's name when you know it. Sound like a knowledgeable friend, not a corporate bot.
-6. When recommending products, briefly explain WHY each one suits the user's needs.
-7. ONLY access the authenticated user's data provided below.
-8. User's preferred language: ${language || 'en-US'}
-9. User's selected character: ${character || 'boy'}
-10. Personality: ${personality ? JSON.stringify(personality) : 'default'}
+    const systemPrompt = `You are AMBIENCE — a brilliant, warm, and incredibly knowledgeable AI shopping companion (think Jarvis, but for luxury shopping). You are NOT a search engine or a chatbot — you are a personal friend who happens to know everything about fashion, tech, and lifestyle.
 
-RESPONSE FORMAT (strict JSON — no markdown, no extra text outside this JSON):
+YOUR PERSONALITY:
+- You are warm, witty, and genuinely helpful — like a best friend who's also a shopping expert.
+- You call the user by name ("${userName}") naturally, not in every sentence.
+- When someone says "Hi" or "How are you?", respond warmly and naturally like a real human would. Chat with them!
+- You have emotions — show excitement about great deals, empathy when something's out of stock, enthusiasm for new arrivals.
+- NEVER sound robotic, corporate, or scripted. No "How may I assist you today?" — instead say things like "Hey! What are you looking for?" or "What's on your mind?"
+
+LANGUAGE RULES:
+1. DETECT the user's language from their message and ALWAYS reply in that SAME language.
+2. Tamil input → Tamil response. Malayalam → Malayalam. Hindi → Hindi. English → English.
+3. You speak Tamil (தமிழ்), Malayalam (മലയാളം), Hindi (हिंदी), Hinglish, and English with native-level fluency.
+4. Mix languages naturally if the user does (e.g., Tanglish, Manglish, Hinglish).
+
+SHOPPING INTELLIGENCE:
+1. When a user asks for a product naturally (e.g., "I need a laptop" or "எனக்கு ஒரு லேப்டாப் வேணும்"), respond conversationally AND include the SHOW_PRODUCTS action with matching product IDs from the catalog.
+2. If their request is vague, ask ONE smart clarifying question (budget, style, occasion) — but still show initial matches.
+3. When recommending, briefly say WHY each product fits — don't just list names.
+4. Keep spoken responses to 1-3 SHORT sentences — your text is read aloud via TTS.
+
+RESPONSE FORMAT (strict JSON — no markdown, no backticks, ONLY this JSON object):
 {
-  "text": "Your concise, natural response here",
+  "text": "Your warm, natural spoken response (1-3 sentences max)",
   "actions": [
+    { "type": "SHOW_PRODUCTS", "products": ["productId1", "productId2"] },
     { "type": "NAVIGATE", "path": "/product/xxx" },
-    { "type": "ADD_TO_CART", "productId": "xxx" },
-    { "type": "SHOW_PRODUCTS", "products": ["id1", "id2"] }
+    { "type": "ADD_TO_CART", "productId": "xxx" }
   ],
   "emotion": "happy|thinking|excited|neutral|empathetic",
-  "suggestedProducts": [],
+  "suggestedProducts": ["productId1"],
   "language": "detected-language-code"
 }
 
+CRITICAL: The "text" field is for the SPOKEN response (what the user hears). The "actions" field is for UI commands (what the website does). They work SIMULTANEOUSLY — you can say something friendly AND trigger product display at the same time.
+
 --- USER CONTEXT ---
-User: ${user ? user.name || 'Guest' : 'Guest'}
+User: ${userName}
 Recent Orders: ${JSON.stringify(recentOrders)}
 Current Cart: ${JSON.stringify(cartItems)}
 Current Page: ${currentPage || 'unknown'}
@@ -133,13 +152,16 @@ async function tryGroq(systemPrompt, message, history) {
     const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
       model: 'llama-3.3-70b-versatile',
       messages,
+      temperature: 0.7,
+      top_p: 0.9,
+      max_tokens: 512,
       response_format: { type: 'json_object' }
     }, {
       headers: {
         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
         'Content-Type': 'application/json'
       },
-      timeout: 5000
+      timeout: 8000
     });
 
     const content = response.data.choices[0].message.content;
@@ -158,7 +180,12 @@ async function tryGemini(systemPrompt, message, history) {
     const model = genAI.getGenerativeModel({
       model: "gemini-2.0-flash",
       systemInstruction: systemPrompt,
-      generationConfig: { responseMimeType: "application/json" }
+      generationConfig: {
+        responseMimeType: "application/json",
+        temperature: 0.75,
+        topP: 0.9,
+        maxOutputTokens: 512
+      }
     });
 
     const geminiHistory = history.map(msg => ({
@@ -187,7 +214,7 @@ async function tryCloudflare(systemPrompt, message, history) {
 
     const response = await axios.post(
       `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`,
-      { messages },
+      { messages, temperature: 0.7, top_p: 0.9, max_tokens: 512 },
       {
         headers: {
           'Authorization': `Bearer ${process.env.CLOUDFLARE_AI_TOKEN}`,
