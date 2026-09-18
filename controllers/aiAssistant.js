@@ -24,15 +24,43 @@ function isValidKey(key) {
 function parseAIResponse(raw) {
   if (typeof raw !== 'string') return null;
   let cleaned = raw.trim();
+  // Strip markdown fences
   const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenceMatch) cleaned = fenceMatch[1].trim();
+  // Find JSON object
   const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) return null;
+  if (!jsonMatch) {
+    // If no JSON found but there's plain text, wrap it
+    if (cleaned.length > 2) {
+      return { text: cleaned.slice(0, 500), actions: [], emotion: 'neutral', language: 'en' };
+    }
+    return null;
+  }
   try {
     const parsed = JSON.parse(jsonMatch[0]);
-    if (typeof parsed.text !== 'string' || !parsed.text.trim()) return null;
+    // Accept response even if text field is missing — build a minimal response
+    if (typeof parsed.text !== 'string' || !parsed.text.trim()) {
+      parsed.text = parsed.message || parsed.response || "Here's what I found!";
+    }
+    // Normalize actions — support both 'action' (string) and 'actions' (array)
+    if (!Array.isArray(parsed.actions)) {
+      parsed.actions = [];
+      if (parsed.action && typeof parsed.action === 'string') {
+        parsed.actions.push({
+          type: parsed.action,
+          path: parsed.path || parsed.navigate || undefined,
+          category: parsed.searchQuery || parsed.category || parsed.query || undefined,
+          products: parsed.products || undefined
+        });
+      }
+    }
     return parsed;
   } catch {
+    // Last resort: try to extract text field manually
+    const textMatch = jsonMatch[0].match(/"text"\s*:\s*"([^"]+)"/);
+    if (textMatch) {
+      return { text: textMatch[1], actions: [], emotion: 'neutral', language: 'en' };
+    }
     return null;
   }
 }
@@ -171,18 +199,42 @@ You are an expert at fuzzy matching. If a user asks for a product with a typo or
 ════════════════════════════════════════════════════════════════════
 When the user asks for products or navigation, you SIMULTANEOUSLY:
   a) SPEAK: Give a warm, excited 1-3 sentence spoken response (TTS-optimized, punchy)
-  b) ACT: Execute the right UI action (SHOW_PRODUCTS, NAVIGATE, ADD_TO_CART)
+  b) ACT: Execute the right UI action using the actions array
 
-Examples of what the user might say and how you respond:
-• "Show me laptops" → Warm response + SHOW_PRODUCTS with laptop objects from catalog
-• "எனக்கு ஒரு லேப்டாப் வேணும்" → Warm Tamil response + SHOW_PRODUCTS with laptops
-• "Take me to shop" / "ஷாப் பேஜ் போ" → Friendly response + NAVIGATE to /shop
-• "Go to electronics" → Response + NAVIGATE to /shop/electronics
-• "Show me watches" → Response + SHOW_PRODUCTS with watches from catalog
-• "Add this to cart" → Confirmation + ADD_TO_CART
-• "What deals do you have?" → Response + NAVIGATE to /deals
-• "Open my cart" → Response + NAVIGATE to /cart
-• "Show men's fashion" → Response + NAVIGATE to /shop/mens
+AVAILABLE ACTION TYPES:
+• NAVIGATE — opens a page. Requires "path" (string). Use EXACT routes listed above.
+• FILTER — filters products on the shop page. Requires "searchQuery" (string, ALWAYS in English, e.g. "laptop", "shoes", "watch"). The frontend will fuzzy-match this against product names/categories/descriptions.
+• SHOW_PRODUCTS — sends full product objects to render. Requires "products" (array of product objects from catalog).
+• ADD_TO_CART — adds a product. Requires "productId" (string).
+
+CRITICAL DUAL-ACTION RULE:
+When a user asks for a product category (even with typos), ALWAYS include BOTH:
+  1. A NAVIGATE action to /shop
+  2. A FILTER action with the corrected English category name in "searchQuery"
+This ensures the user sees the shop page AND it auto-filters to their requested products.
+
+═══ CONCRETE EXAMPLES (FOLLOW EXACTLY) ═══
+
+User: "Show me laptops"
+Response: {"text": "Ooh, let me pull up our best laptops for you!", "actions": [{"action": "NAVIGATE", "path": "/shop"}, {"action": "FILTER", "searchQuery": "laptop"}], "emotion": "excited", "language": "en"}
+
+User: "எனக்கு ஒரு லேப்டாப் வேணும்"
+Response: {"text": "சூப்பர்! இதோ நீங்கள் கேட்ட லேப்டாப்கள்!", "actions": [{"action": "NAVIGATE", "path": "/shop"}, {"action": "FILTER", "searchQuery": "laptop"}], "emotion": "excited", "language": "ta"}
+
+User: "Take me to shop and show shoes"
+Response: {"text": "On it! Heading to the shop with our best footwear!", "actions": [{"action": "NAVIGATE", "path": "/shop"}, {"action": "FILTER", "searchQuery": "shoes"}], "emotion": "excited", "language": "en"}
+
+User: "show me shoss" (typo)
+Response: {"text": "Got you! Check out these shoes!", "actions": [{"action": "NAVIGATE", "path": "/shop"}, {"action": "FILTER", "searchQuery": "shoes"}], "emotion": "excited", "language": "en"}
+
+User: "labdop dikhaao" (typo + Hindi)
+Response: {"text": "ये रहे बेस्ट लैपटॉप्स!", "actions": [{"action": "NAVIGATE", "path": "/shop"}, {"action": "FILTER", "searchQuery": "laptop"}], "emotion": "excited", "language": "hi"}
+
+User: "Go to electronics"
+Response: {"text": "Taking you to electronics!", "actions": [{"action": "NAVIGATE", "path": "/shop/electronics"}], "emotion": "happy", "language": "en"}
+
+User: "Open my cart"
+Response: {"text": "Here's your cart!", "actions": [{"action": "NAVIGATE", "path": "/cart"}], "emotion": "neutral", "language": "en"}
 
 Navigation keyword mapping (multilingual):
 - shop/store/கடை/दुकान → /shop
@@ -203,26 +255,25 @@ Navigation keyword mapping (multilingual):
 ════════════════════════════════════════════════════════════════════
 █ RESPONSE FORMAT (STRICT JSON — NO MARKDOWN, NO FENCES)
 ════════════════════════════════════════════════════════════════════
+ONLY output a raw JSON object. No markdown. No code fences. No text before or after.
 {
   "text": "Your warm, natural SPOKEN response (1-3 short punchy sentences, TTS-optimized)",
   "actions": [
-    { "type": "NAVIGATE", "path": "/shop" },
-    { "type": "FILTER", "category": "laptop" },
-    { "type": "SHOW_PRODUCTS", "products": [<full product objects from catalog>] },
-    { "type": "ADD_TO_CART", "productId": "xxx" }
+    { "action": "NAVIGATE", "path": "/shop" },
+    { "action": "FILTER", "searchQuery": "laptop" }
   ],
   "emotion": "happy|thinking|excited|neutral|empathetic|playful",
-  "suggestedProducts": [],
   "language": "en|ta|ml|hi|tanglish|hinglish"
 }
 
 RULES:
 • "text" = what the user HEARS via TTS. Keep it 1-3 short sentences. No JSON/code in text.
-• "actions" = UI commands executed on screen. NAVIGATE uses exact route paths listed above.
-• For SHOW_PRODUCTS, include FULL product objects from the catalog so the frontend can render them instantly.
+• "actions" = UI commands executed on screen. Can have MULTIPLE actions simultaneously.
+• The "searchQuery" in FILTER must ALWAYS be in English regardless of conversation language.
 • Both "text" and "actions" happen SIMULTANEOUSLY.
 • ONLY output the JSON object. Absolutely nothing else before or after.
 • If no action is needed, use empty actions array [].
+• NEVER return markdown, code fences, or explanations — ONLY raw JSON.
 
 ═══ USER CONTEXT ═══
 User: ${userName}
@@ -274,10 +325,11 @@ ${catalogContext}
       return res.json({ success: true, response: normalizeResponse(cfResult) });
     }
 
-    // ── Tier 5: Smart contextual fallback (ZERO error messages) ───────────────
-    console.log('[Ambience AI] ⚠️ All external APIs unavailable — using smart fallback.');
-    const fallback = localNLP.getFallbackResponse(message, detectedLang === 'ta' ? 'tamil' : detectedLang === 'ml' ? 'malayalam' : detectedLang === 'hi' ? 'hindi' : 'english');
-    return res.json({ success: true, response: normalizeResponse(fallback) });
+    // ── Tier 5: Smart product-aware fallback (NOT a dead end) ──────────────────
+    console.log('[Ambience AI] ⚠️ All external APIs unavailable — trying smart local product match.');
+    const lang = detectedLang === 'ta' ? 'tamil' : detectedLang === 'ml' ? 'malayalam' : detectedLang === 'hi' ? 'hindi' : 'english';
+    const smartFallback = await buildSmartFallback(message, lang);
+    return res.json({ success: true, response: normalizeResponse(smartFallback) });
 
   } catch (error) {
     console.error('[Ambience AI] Unhandled chat error:', error);
@@ -293,6 +345,163 @@ ${catalogContext}
     });
   }
 };
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SMART FALLBACK — Local product matching when ALL LLMs are down
+// ══════════════════════════════════════════════════════════════════════════════
+
+const PRODUCT_KEYWORDS = {
+  laptop: ['laptop', 'laptops', 'labdop', 'labtop', 'notebook', 'லேப்டாப்', 'लैपटॉप'],
+  phone: ['phone', 'phones', 'smartphone', 'mobile', 'fone', 'ஃபோன்', 'फोन', 'மொபைல்'],
+  shoes: ['shoes', 'shoe', 'shoss', 'footwear', 'sneakers', 'boots', 'ஷூ', 'காலணி', 'जूते'],
+  watch: ['watch', 'watches', 'wach', 'timepiece', 'வாட்ச்', 'घड़ी'],
+  perfume: ['perfume', 'perfumes', 'fragrance', 'cologne', 'சென்ட்', 'பர்ஃபியூம்', 'इत्र'],
+  shirt: ['shirt', 'shirts', 'tshirt', 't-shirt', 'top', 'tops', 'சட்டை', 'शर्ट'],
+  bag: ['bag', 'bags', 'handbag', 'backpack', 'பை', 'बैग'],
+  cosmetics: ['cosmetics', 'makeup', 'skincare', 'beauty', 'மேக்கப்', 'मेकअप'],
+  headphones: ['headphones', 'earphones', 'earbuds', 'headphone', 'ஹெட்ஃபோன்', 'हेडफोन'],
+  tablet: ['tablet', 'tablets', 'ipad', 'டேப்லெட்', 'टैबलेट'],
+  accessories: ['accessories', 'accessory', 'jewelry', 'belt', 'wallet', 'அக்சசரீஸ்'],
+  electronics: ['electronics', 'gadgets', 'tech', 'எலக்ட்ரானிக்ஸ்', 'इलेक्ट्रॉनिक्स']
+};
+
+const NAV_KEYWORDS = {
+  '/shop': ['shop', 'store', 'browse', 'கடை', 'दुकान', 'ஷாப்'],
+  '/cart': ['cart', 'basket', 'கார்ட்', 'कार्ट'],
+  '/deals': ['deals', 'deal', 'offers', 'sale', 'ஆஃபர்', 'ऑफर'],
+  '/orders': ['orders', 'order', 'my order', 'ஆர்டர்', 'ऑर्डर'],
+  '/shop/mens': ['mens', "men's", 'men', 'ஆண்கள்', 'पुरुष'],
+  '/shop/womens': ['womens', "women's", 'women', 'பெண்கள்', 'महिला'],
+  '/shop/electronics': ['electronics', 'electronic', 'gadgets', 'எலக்ட்ரானிக்ஸ்'],
+  '/shop/footwear': ['footwear', 'shoes', 'ஷூ', 'जूते'],
+  '/shop/timepieces': ['timepieces', 'watches', 'வாட்ச்', 'घड़ी'],
+  '/shop/fragrances': ['fragrances', 'perfumes', 'சென்ட்', 'इत्र'],
+  '/shop/cosmetics': ['cosmetics', 'makeup', 'மேக்கப்', 'मेकअप'],
+  '/shop/accessories': ['accessories', 'அக்சசரீஸ்'],
+  '/profile': ['profile', 'account', 'புரொஃபைல்', 'प्रोफाइल'],
+  '/settings': ['settings', 'செட்டிங்ஸ்', 'सेटिंग्स']
+};
+
+async function buildSmartFallback(message, lang) {
+  const lower = message.toLowerCase();
+  const words = lower.split(/\s+/);
+
+  // 1. Check for product category match (fuzzy)
+  let matchedCategory = null;
+  for (const [category, keywords] of Object.entries(PRODUCT_KEYWORDS)) {
+    for (const kw of keywords) {
+      if (lower.includes(kw)) {
+        matchedCategory = category;
+        break;
+      }
+    }
+    if (matchedCategory) break;
+  }
+
+  // 2. Check for navigation intent
+  let matchedPath = null;
+  for (const [path, keywords] of Object.entries(NAV_KEYWORDS)) {
+    for (const kw of keywords) {
+      if (lower.includes(kw)) {
+        matchedPath = path;
+        break;
+      }
+    }
+    if (matchedPath) break;
+  }
+
+  // 3. Build response based on matches
+  const actions = [];
+  const textMap = {
+    english: {},
+    tamil: {},
+    hindi: {},
+    malayalam: {}
+  };
+
+  if (matchedCategory) {
+    // Navigate to shop + filter
+    actions.push({ action: 'NAVIGATE', path: '/shop' });
+    actions.push({ action: 'FILTER', searchQuery: matchedCategory });
+
+    const texts = {
+      english: `Here you go! Showing you our best ${matchedCategory} collection!`,
+      tamil: `இதோ! உங்களுக்கான சிறந்த ${matchedCategory} கலெக்ஷன்!`,
+      hindi: `लीजिए! आपके लिए बेस्ट ${matchedCategory} कलेक्शन!`,
+      malayalam: `ഇതാ! നിങ്ങൾക്കായി ബെസ്റ്റ് ${matchedCategory} കളക്ഷൻ!`
+    };
+
+    return {
+      text: texts[lang] || texts.english,
+      actions,
+      emotion: 'excited',
+      language: lang === 'tamil' ? 'ta' : lang === 'hindi' ? 'hi' : lang === 'malayalam' ? 'ml' : 'en'
+    };
+  }
+
+  if (matchedPath) {
+    actions.push({ type: 'NAVIGATE', path: matchedPath });
+    const pageName = matchedPath.replace(/\//g, ' ').trim() || 'page';
+
+    const texts = {
+      english: `Taking you to ${pageName}!`,
+      tamil: `${pageName} பக்கத்துக்கு போகிறோம்!`,
+      hindi: `${pageName} पेज पर ले जा रहा हूँ!`,
+      malayalam: `${pageName} പേജിലേക്ക് പോകുന്നു!`
+    };
+
+    return {
+      text: texts[lang] || texts.english,
+      actions,
+      emotion: 'happy',
+      language: lang === 'tamil' ? 'ta' : lang === 'hindi' ? 'hi' : lang === 'malayalam' ? 'ml' : 'en'
+    };
+  }
+
+  // 4. Try DB product search as last resort
+  try {
+    const products = await Product.find({
+      status: 'live',
+      $or: [
+        { name: { $regex: lower.split(/\s+/).join('|'), $options: 'i' } },
+        { category: { $regex: lower.split(/\s+/).join('|'), $options: 'i' } },
+        { description: { $regex: lower.split(/\s+/).join('|'), $options: 'i' } }
+      ]
+    }).limit(10).lean();
+
+    if (products.length > 0) {
+      const category = products[0].category || 'products';
+      return {
+        text: lang === 'tamil' ? `இதோ உங்களுக்கான ${category}!` :
+              lang === 'hindi' ? `ये रहे आपके लिए ${category}!` :
+              `Found some great ${category} for you!`,
+        actions: [
+          { action: 'NAVIGATE', path: '/shop' },
+          { action: 'FILTER', searchQuery: category }
+        ],
+        emotion: 'excited',
+        language: lang === 'tamil' ? 'ta' : lang === 'hindi' ? 'hi' : lang === 'malayalam' ? 'ml' : 'en'
+      };
+    }
+  } catch (dbErr) {
+    console.warn('[Smart Fallback] DB search failed:', dbErr.message);
+  }
+
+  // 5. Genuine unknown — still friendly
+  const fallbackTexts = {
+    english: "I'd love to help with that! Could you tell me a bit more about what you're looking for?",
+    tamil: "உதவி செய்ய ரெடி! என்ன தேடுறீங்கன்னு இன்னும் கொஞ்சம் சொல்லுங்க!",
+    hindi: "मैं मदद करने को तैयार हूँ! और बताओ क्या चाहिए?",
+    malayalam: "സഹായിക്കാൻ റെഡി! എന്താ നോക്കുന്നതെന്ന് കൂടുതൽ പറയൂ!"
+  };
+
+  return {
+    text: fallbackTexts[lang] || fallbackTexts.english,
+    actions: [],
+    emotion: 'empathetic',
+    language: lang === 'tamil' ? 'ta' : lang === 'hindi' ? 'hi' : lang === 'malayalam' ? 'ml' : 'en'
+  };
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // RESPONSE NORMALIZER
