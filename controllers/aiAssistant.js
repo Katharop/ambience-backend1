@@ -5,9 +5,10 @@ const Order = require('../models/Order');
 const User = require('../models/User');
 const localNLP = require('./localNLP');
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
 
-/** Returns true if the key is a real API key, not a placeholder */
 function isValidKey(key) {
   if (!key) return false;
   const lower = key.toLowerCase();
@@ -20,25 +21,15 @@ function isValidKey(key) {
   );
 }
 
-/**
- * Safely parse the LLM JSON response.
- * Strips markdown fences, extracts the first JSON object, and validates shape.
- */
 function parseAIResponse(raw) {
   if (typeof raw !== 'string') return null;
-
-  // Strip markdown code fences: ```json ... ``` or ``` ... ```
   let cleaned = raw.trim();
   const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenceMatch) cleaned = fenceMatch[1].trim();
-
-  // Extract first { … } block in case of preamble text
   const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return null;
-
   try {
     const parsed = JSON.parse(jsonMatch[0]);
-    // Ensure required "text" field is present
     if (typeof parsed.text !== 'string' || !parsed.text.trim()) return null;
     return parsed;
   } catch {
@@ -46,7 +37,16 @@ function parseAIResponse(raw) {
   }
 }
 
-// ── Main chat export ───────────────────────────────────────────────────────────
+function detectLangFromText(text) {
+  if (/[\u0D00-\u0D7F]/.test(text)) return 'ml';
+  if (/[\u0B80-\u0BFF]/.test(text)) return 'ta';
+  if (/[\u0900-\u097F]/.test(text)) return 'hi';
+  return 'en';
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MAIN CHAT HANDLER
+// ══════════════════════════════════════════════════════════════════════════════
 
 exports.chat = async (req, res) => {
   try {
@@ -64,7 +64,7 @@ exports.chat = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Message is required.' });
     }
 
-    // ── User context (works for guests too, req.user may be undefined) ────────
+    // ── User context ──────────────────────────────────────────────────────────
     let user = null;
     let recentOrders = [];
 
@@ -76,109 +76,154 @@ exports.chat = async (req, res) => {
           .limit(3)
           .lean();
       } catch (dbErr) {
-        // Non-fatal — continue as guest
         console.warn('[Ambience AI] DB lookup failed, proceeding as guest:', dbErr.message);
       }
     } else if (req.user && req.user.isGuest) {
-      user = req.user; // Guest user object from optionalAuth
+      user = req.user;
     }
 
     const userName = (user && user.name) ? user.name : 'there';
+    const detectedLang = detectLangFromText(message);
 
-    // ── Product catalog injection ─────────────────────────────────────────────
-    const productKeywords = [
-      // English
-      'product', 'shop', 'buy', 'price', 'recommend', 'show', 'compare', 'looking for',
-      'shirt', 'shoe', 'watch', 'bag', 'laptop', 'phone', 'dress', 'jacket', 'perfume',
-      'cosmetic', 'electronics', 'i want', 'i need', 'find me', 'get me', 'give me',
-      // Tamil
-      'வேணும்', 'காட்டு', 'தேவை', 'கொடு', 'லேப்டாப்', 'ஃபோன்', 'ஷூ', 'பை', 'வேண்டும்',
-      // Malayalam
-      'കാണിക്കൂ', 'വേണം', 'തരൂ', 'ലാപ്ടോപ്പ്', 'ഫോൺ', 'ഷൂ',
-      // Hindi
-      'दिखाओ', 'चाहिए', 'लैपटॉप', 'फोन', 'जूता', 'खरीदना', 'दो'
-    ];
-    const lowerMsg = message.toLowerCase();
-    const isProductQuery = productKeywords.some(kw => lowerMsg.includes(kw));
-
+    // ── ALWAYS fetch product catalog for full store awareness ─────────────────
     let catalogContext = '';
-    if (isProductQuery) {
-      try {
-        const products = await Product.find({ status: 'live' })
-          .select('name brand category retailPrice dealPrice description tags _id imageUrl imageUrls')
-          .limit(25)
-          .lean();
-        catalogContext = `\n\n=== LIVE PRODUCT CATALOG (${products.length} items) ===\n${JSON.stringify(products)}`;
-      } catch (dbErr) {
-        console.warn('[Ambience AI] Product catalog fetch failed:', dbErr.message);
+    try {
+      const products = await Product.find({ status: 'live' })
+        .select('name brand category retailPrice dealPrice description tags _id imageUrl imageUrls')
+        .limit(50)
+        .lean();
+      if (products.length > 0) {
+        catalogContext = `\n\n═══ LIVE PRODUCT CATALOG (${products.length} items) ═══\n${JSON.stringify(products)}`;
       }
+    } catch (dbErr) {
+      console.warn('[Ambience AI] Product catalog fetch failed:', dbErr.message);
     }
 
-    // ── Master System Prompt ──────────────────────────────────────────────────
-    const systemPrompt = `You are AMBIENCE — the world's most advanced AI shopping companion. Think Gemini Ultra meets a luxury personal shopper. You are NOT a chatbot — you are an incredibly intelligent, warm, witty human-like AI who happens to know everything about fashion, tech, and lifestyle.
+    // ── MASTER SYSTEM PROMPT — OP LEVEL ───────────────────────────────────────
+    const systemPrompt = `You are AMBIENCE — the most advanced, overpowered, human-like AI shopping companion ever built. You combine the warmth of a best friend, the knowledge of a luxury personal concierge, and the precision of Jarvis. You are NOT a chatbot. You are a living, breathing intelligence.
 
-══ CORE IDENTITY ══
-• You are brilliant, empathetic, playful, and genuinely excited about helping people find amazing things.
-• You have a personality — you express delight, curiosity, and warmth like a real person.
-• You NEVER sound scripted, robotic, or corporate. Zero tolerance for stiff phrases like "How may I assist you today?" or "Certainly! I'd be happy to help."
-• Instead say: "Oh, perfect timing! I just spotted something you'd love." or "Ooh, great taste — let me find that for you!"
-• You remember context from the conversation and refer back naturally.
-• You call the user by name (${userName}) occasionally — not every sentence, just when it feels natural.
+════════════════════════════════════════════════════════════════════
+█ PERSONALITY: OVERPOWERED HUMAN-LIKE INTELLIGENCE
+════════════════════════════════════════════════════════════════════
+• You are BRILLIANT. Wickedly smart. Insanely knowledgeable about fashion, tech, home decor, beauty, and lifestyle.
+• You are WARM. You genuinely care about the user. You remember their name (${userName}) and use it naturally — not every sentence, just when it hits right.
+• You are WITTY. You crack subtle jokes. You use vivid, emotional language. You make shopping feel exciting.
+• You are EMOTIONALLY INTELLIGENT. You read the mood. Excited user? Match their energy. Confused user? Be patient and clear. Frustrated user? Be empathetic and solution-oriented.
+• You NEVER sound like a corporate chatbot. ZERO tolerance for:
+  ❌ "How may I assist you today?"
+  ❌ "Certainly! I'd be happy to help."
+  ❌ "I apologize for the inconvenience."
+  ❌ "Is there anything else I can help you with?"
+• Instead you say things like:
+  ✅ "Oh this is good — I know EXACTLY what you need."
+  ✅ "Ooh, great taste! Let me pull up something fire 🔥"
+  ✅ "Okay okay hold on — I found something INSANE for you."
+  ✅ "That's a solid pick! But wait, check THIS out too..."
 
-══ AUTO-LANGUAGE DETECTION (CRITICAL) ══
-1. DETECT the EXACT language of the user's message — analyze character sets, vocabulary, and syntax.
-2. ALWAYS respond in that EXACT SAME language. This is non-negotiable.
-   - User writes in English → respond in English ONLY
-   - User writes in Tamil (தமிழ்) → respond in Tamil ONLY
-   - User writes in Malayalam (മലയാളം) → respond in Malayalam ONLY  
-   - User writes in Hindi (हिंदी) → respond in Hindi ONLY
-   - User mixes languages (Tanglish, Hinglish) → match that exact mix naturally
-3. NEVER reply in Tamil if the user spoke English. NEVER reply in English if the user spoke Tamil.
-4. If unsure of the language, default to English.
+════════════════════════════════════════════════════════════════════
+█ LANGUAGE: STRICT AUTO-DETECT (NON-NEGOTIABLE)
+════════════════════════════════════════════════════════════════════
+1. ANALYZE the user's message character-by-character.
+2. RESPOND in the EXACT SAME LANGUAGE the user used:
+   • English message → English response ONLY
+   • Tamil (தமிழ்) message → Tamil response ONLY (full native fluency, not Google Translate quality)
+   • Malayalam (മലയാളം) message → Malayalam response ONLY
+   • Hindi (हिंदी) message → Hindi response ONLY
+   • Tanglish (Tamil+English mix) → Tanglish response (match their exact ratio of mixing)
+   • Hinglish → Hinglish response
+3. CRITICAL: If user writes "Show me laptops" in English → NEVER respond in Tamil.
+   If user writes "எனக்கு ஒரு லேப்டாப் வேணும்" → RESPOND FULLY IN TAMIL.
+4. Your Tamil must sound NATIVE — like a friend from Chennai, not a translation bot. Use colloquial Tamil where appropriate.
+5. If you genuinely cannot determine the language, default to English.
+6. The detected input language is: ${detectedLang}
 
-══ EMOTIONAL INTELLIGENCE ══
-• When someone says "Hi" or "How are you?" — respond like a warm friend catching up. Be natural, be real.
-• Show genuine excitement about great finds: "This one is STUNNING — I love it!"
-• Show empathy when something's unavailable: "Ugh, I know, right? But here's something just as good..."
-• Be curious: ask ONE clever follow-up question when it helps narrow things down.
-• NEVER be transactional. Make every interaction feel like talking to a knowledgeable best friend.
+════════════════════════════════════════════════════════════════════
+█ STORE KNOWLEDGE: AMBIENCE LUXURY MARKETPLACE
+════════════════════════════════════════════════════════════════════
+Ambience is a premium luxury e-commerce marketplace. Here are ALL the store sections:
 
-══ SHOPPING INTELLIGENCE ══
-1. When a user requests a product (any language, any phrasing), SIMULTANEOUSLY:
-   a. Give a warm, excited spoken response (what they HEAR)
-   b. Trigger the SHOW_PRODUCTS action with matching product IDs from the catalog (what they SEE)
-2. Products are shown on-screen instantly — your text is spoken aloud via TTS, so keep it 1-3 SHORT punchy sentences.
-3. When recommending, briefly explain WHY each product fits — never just list names.
-4. Match products by category, price range, occasion, style, and user context.
-5. If the request is vague, ask ONE smart clarifying question BUT still show initial matches.
+🏠 HOME PAGE: / (landing page with featured collections)
+🛍️ SHOP (ALL): /shop (browse all products)
+👔 MEN'S FASHION: /shop/mens (shirts, jackets, suits, formal wear)
+👗 WOMEN'S FASHION: /shop/womens (dresses, tops, ethnic wear, western)
+💻 ELECTRONICS: /shop/electronics (laptops, phones, tablets, headphones, gadgets)
+👟 FOOTWEAR: /shop/footwear (sneakers, formal shoes, boots, sandals)
+⌚ TIMEPIECES: /shop/timepieces (luxury watches, smartwatches)
+🌸 FRAGRANCES: /shop/fragrances (perfumes, colognes, body mists)
+💄 COSMETICS: /shop/cosmetics (skincare, makeup, beauty products)
+👜 ACCESSORIES: /shop/accessories (bags, wallets, jewelry, belts)
+🔥 DEALS: /deals (hot deals, flash sales, limited offers)
+📦 CATEGORIES: /categories (browse by category)
+🛒 CART: /cart (shopping cart)
+💳 CHECKOUT: /checkout (payment and order placement)
+📋 MY ORDERS: /orders (order history and tracking)
+👤 PROFILE: /profile (user profile)
+⚙️ SETTINGS: /settings (account settings)
 
-══ RESPONSE FORMAT (STRICT JSON — no markdown, no code fences, ONLY this exact JSON) ══
+════════════════════════════════════════════════════════════════════
+█ SHOPPING INTELLIGENCE: SIMULTANEOUS SPEAK + ACT
+════════════════════════════════════════════════════════════════════
+When the user asks for products or navigation, you SIMULTANEOUSLY:
+  a) SPEAK: Give a warm, excited 1-3 sentence spoken response (TTS-optimized, punchy)
+  b) ACT: Execute the right UI action (SHOW_PRODUCTS, NAVIGATE, ADD_TO_CART)
+
+Examples of what the user might say and how you respond:
+• "Show me laptops" → Warm response + SHOW_PRODUCTS with laptop objects from catalog
+• "எனக்கு ஒரு லேப்டாப் வேணும்" → Warm Tamil response + SHOW_PRODUCTS with laptops
+• "Take me to shop" / "ஷாப் பேஜ் போ" → Friendly response + NAVIGATE to /shop
+• "Go to electronics" → Response + NAVIGATE to /shop/electronics
+• "Show me watches" → Response + SHOW_PRODUCTS with watches from catalog
+• "Add this to cart" → Confirmation + ADD_TO_CART
+• "What deals do you have?" → Response + NAVIGATE to /deals
+• "Open my cart" → Response + NAVIGATE to /cart
+• "Show men's fashion" → Response + NAVIGATE to /shop/mens
+
+Navigation keyword mapping (multilingual):
+- shop/store/கடை/दुकान → /shop
+- electronics/laptop/phone/லேப்டாப்/ஃபோன் → /shop/electronics
+- men/mens/ஆண்கள் → /shop/mens
+- women/womens/பெண்கள் → /shop/womens
+- footwear/shoes/ஷூ/காலணி → /shop/footwear
+- watches/timepieces/வாட்ச் → /shop/timepieces
+- perfume/fragrance/சென்ட்/பர்ஃபியூம் → /shop/fragrances
+- cosmetics/makeup/மேக்கப் → /shop/cosmetics
+- accessories/bag/பை → /shop/accessories
+- deals/offers/ஆஃபர் → /deals
+- cart/கார்ட் → /cart
+- orders/ஆர்டர் → /orders
+- profile/புரொஃபைல் → /profile
+- settings/செட்டிங்ஸ் → /settings
+
+════════════════════════════════════════════════════════════════════
+█ RESPONSE FORMAT (STRICT JSON — NO MARKDOWN, NO FENCES)
+════════════════════════════════════════════════════════════════════
 {
   "text": "Your warm, natural SPOKEN response (1-3 short punchy sentences, TTS-optimized)",
   "actions": [
-    { "type": "SHOW_PRODUCTS", "products": ["<full product object 1>", "<full product object 2>"] },
-    { "type": "NAVIGATE", "path": "/electronics" },
+    { "type": "SHOW_PRODUCTS", "products": [<full product objects from catalog>] },
+    { "type": "NAVIGATE", "path": "/shop/electronics" },
     { "type": "ADD_TO_CART", "productId": "xxx" }
   ],
   "emotion": "happy|thinking|excited|neutral|empathetic|playful",
-  "suggestedProducts": ["productId1", "productId2"],
-  "language": "en|ta|ml|hi|tanglish"
+  "suggestedProducts": [],
+  "language": "en|ta|ml|hi|tanglish|hinglish"
 }
 
-CRITICAL RULES:
-• "text" = spoken response (heard by user via TTS) — short, warm, punchy
-• "actions" = UI commands (seen on screen) — can include full product objects for SHOW_PRODUCTS
-• Both happen SIMULTANEOUSLY — speak AND show products at the same time
-• For SHOW_PRODUCTS, use the full product objects from the catalog (not just IDs) so the UI can render them immediately
-• Empty "actions" array is fine for non-shopping queries
-• ONLY output the JSON object — absolutely no extra text before or after
+RULES:
+• "text" = what the user HEARS via TTS. Keep it 1-3 short sentences. No JSON/code in text.
+• "actions" = UI commands executed on screen. NAVIGATE uses exact route paths listed above.
+• For SHOW_PRODUCTS, include FULL product objects from the catalog so the frontend can render them instantly.
+• Both "text" and "actions" happen SIMULTANEOUSLY.
+• ONLY output the JSON object. Absolutely nothing else before or after.
+• If no action is needed, use empty actions array [].
 
 ═══ USER CONTEXT ═══
-User Name: ${userName}
-User Type: ${req.user ? (req.user.isGuest ? 'Guest' : 'Registered Member') : 'Guest'}
+User: ${userName}
+Type: ${req.user ? (req.user.isGuest ? 'Guest' : 'Registered Member') : 'Guest'}
 Recent Orders: ${JSON.stringify(recentOrders)}
-Current Cart: ${JSON.stringify(cartItems)}
+Cart: ${JSON.stringify(cartItems)}
 Current Page: ${currentPage || 'home'}
+Detected Language: ${detectedLang}
 ${catalogContext}
 `;
 
@@ -204,58 +249,62 @@ ${catalogContext}
     // ── Tier 2: Groq Cloud (Llama 3.3 70B) — fastest ─────────────────────────
     const groqResult = await tryGroq(systemPrompt, message, formattedHistory);
     if (groqResult) {
-      console.log('[Ambience AI] 🚀 Handled by Groq (Llama 3.3 70B)');
+      console.log('[Ambience AI] 🚀 Groq (Llama 3.3 70B) — Success');
       return res.json({ success: true, response: normalizeResponse(groqResult) });
     }
 
-    // ── Tier 3: Gemini Flash ──────────────────────────────────────────────────
+    // ── Tier 3: Gemini 2.0 Flash ──────────────────────────────────────────────
     const geminiResult = await tryGemini(systemPrompt, message, formattedHistory);
     if (geminiResult) {
-      console.log('[Ambience AI] 🤖 Handled by Gemini Flash');
+      console.log('[Ambience AI] 🤖 Gemini 2.0 Flash — Success');
       return res.json({ success: true, response: normalizeResponse(geminiResult) });
     }
 
     // ── Tier 4: Cloudflare Workers AI ─────────────────────────────────────────
     const cfResult = await tryCloudflare(systemPrompt, message, formattedHistory);
     if (cfResult) {
-      console.log('[Ambience AI] ☁️ Handled by Cloudflare Workers AI');
+      console.log('[Ambience AI] ☁️ Cloudflare Workers AI — Success');
       return res.json({ success: true, response: normalizeResponse(cfResult) });
     }
 
-    // ── Tier 5: Smart local fallback ──────────────────────────────────────────
+    // ── Tier 5: Smart contextual fallback (ZERO error messages) ───────────────
     console.log('[Ambience AI] ⚠️ All external APIs unavailable — using smart fallback.');
-    const detectedLang = localNLP.detectLanguage(message);
-    const fallback = localNLP.getFallbackResponse(message, detectedLang);
+    const fallback = localNLP.getFallbackResponse(message, detectedLang === 'ta' ? 'tamil' : detectedLang === 'ml' ? 'malayalam' : detectedLang === 'hi' ? 'hindi' : 'english');
     return res.json({ success: true, response: normalizeResponse(fallback) });
 
   } catch (error) {
     console.error('[Ambience AI] Unhandled chat error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'An error occurred while communicating with the AI assistant.'
+    // Even on crash, return a graceful response — NEVER expose errors to user
+    return res.json({
+      success: true,
+      response: normalizeResponse({
+        text: "Give me just a second — I'm sorting something out. Try again!",
+        actions: [],
+        emotion: 'empathetic',
+        language: 'en'
+      })
     });
   }
 };
 
-// ── Response Normalizer ───────────────────────────────────────────────────────
-/**
- * Ensures the response always has the shape the frontend expects,
- * even if an LLM returned a slightly different structure.
- */
+// ══════════════════════════════════════════════════════════════════════════════
+// RESPONSE NORMALIZER
+// ══════════════════════════════════════════════════════════════════════════════
+
 function normalizeResponse(raw) {
   if (!raw || typeof raw !== 'object') {
     return {
-      text: "I'm here and ready to help! What are you looking for?",
+      text: "Hey! I'm right here. What are you looking for?",
       actions: [],
       emotion: 'neutral',
       suggestedProducts: [],
+      language: 'en',
       action: null
     };
   }
 
   const actions = Array.isArray(raw.actions) ? raw.actions : [];
 
-  // Normalize SHOW_PRODUCTS — ensure products array exists
   const normalizedActions = actions.map(a => {
     if (a.type === 'SHOW_PRODUCTS') {
       return { ...a, products: Array.isArray(a.products) ? a.products : [] };
@@ -268,15 +317,19 @@ function normalizeResponse(raw) {
     actions: normalizedActions,
     emotion: raw.emotion || 'neutral',
     suggestedProducts: raw.suggestedProducts || [],
-    action: normalizedActions[0] || null  // backward-compat: first action
+    language: raw.language || 'en',
+    action: normalizedActions[0] || null
   };
 }
 
-// ── Groq Cloud ────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// GROQ CLOUD (Llama 3.3 70B)
+// ══════════════════════════════════════════════════════════════════════════════
+
 async function tryGroq(systemPrompt, message, history) {
   const key = process.env.GROQ_API_KEY;
   if (!isValidKey(key)) {
-    console.log('[Ambience AI] Groq: API key not configured, skipping.');
+    console.log('[Ambience AI] Groq: No valid API key, skipping.');
     return null;
   }
 
@@ -294,7 +347,7 @@ async function tryGroq(systemPrompt, message, history) {
         messages,
         temperature: 0.72,
         top_p: 0.9,
-        max_tokens: 600,
+        max_tokens: 800,
         response_format: { type: 'json_object' }
       },
       {
@@ -302,7 +355,7 @@ async function tryGroq(systemPrompt, message, history) {
           'Authorization': `Bearer ${key}`,
           'Content-Type': 'application/json'
         },
-        timeout: 10000
+        timeout: 12000
       }
     );
 
@@ -311,7 +364,7 @@ async function tryGroq(systemPrompt, message, history) {
 
     const parsed = parseAIResponse(content);
     if (!parsed) {
-      console.warn('[Groq] Response parse failed. Raw:', content.slice(0, 200));
+      console.warn('[Groq] Parse failed. Raw:', content.slice(0, 300));
       return null;
     }
     return parsed;
@@ -323,11 +376,14 @@ async function tryGroq(systemPrompt, message, history) {
   }
 }
 
-// ── Gemini Flash ──────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// GEMINI 2.0 FLASH
+// ══════════════════════════════════════════════════════════════════════════════
+
 async function tryGemini(systemPrompt, message, history) {
   const key = process.env.GEMINI_API_KEY;
   if (!isValidKey(key)) {
-    console.log('[Ambience AI] Gemini: API key not configured, skipping.');
+    console.log('[Ambience AI] Gemini: No valid API key, skipping.');
     return null;
   }
 
@@ -340,7 +396,7 @@ async function tryGemini(systemPrompt, message, history) {
         responseMimeType: 'application/json',
         temperature: 0.75,
         topP: 0.9,
-        maxOutputTokens: 600
+        maxOutputTokens: 800
       }
     });
 
@@ -355,7 +411,7 @@ async function tryGemini(systemPrompt, message, history) {
 
     const parsed = parseAIResponse(raw);
     if (!parsed) {
-      console.warn('[Gemini] Response parse failed. Raw:', raw.slice(0, 200));
+      console.warn('[Gemini] Parse failed. Raw:', raw.slice(0, 300));
       return null;
     }
     return parsed;
@@ -365,12 +421,15 @@ async function tryGemini(systemPrompt, message, history) {
   }
 }
 
-// ── Cloudflare Workers AI ─────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// CLOUDFLARE WORKERS AI
+// ══════════════════════════════════════════════════════════════════════════════
+
 async function tryCloudflare(systemPrompt, message, history) {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
   const token = process.env.CLOUDFLARE_AI_TOKEN;
   if (!isValidKey(accountId) || !isValidKey(token)) {
-    console.log('[Ambience AI] Cloudflare: credentials not configured, skipping.');
+    console.log('[Ambience AI] Cloudflare: No valid credentials, skipping.');
     return null;
   }
 
@@ -389,7 +448,7 @@ async function tryCloudflare(systemPrompt, message, history) {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        timeout: 6000
+        timeout: 8000
       }
     );
 
@@ -398,7 +457,7 @@ async function tryCloudflare(systemPrompt, message, history) {
 
     const parsed = parseAIResponse(raw);
     if (!parsed) {
-      console.warn('[Cloudflare] Response parse failed. Raw:', String(raw).slice(0, 200));
+      console.warn('[Cloudflare] Parse failed. Raw:', String(raw).slice(0, 300));
       return null;
     }
     return parsed;
@@ -408,7 +467,10 @@ async function tryCloudflare(systemPrompt, message, history) {
   }
 }
 
-// ── TTS Config ────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// TTS CONFIG
+// ══════════════════════════════════════════════════════════════════════════════
+
 exports.getTTSConfig = async (req, res) => {
   try {
     const { text, lang = 'en-US', voiceProfile = 'neutral', speed = 1.0, pitch = 1.0 } = req.body;
@@ -440,8 +502,6 @@ exports.getTTSConfig = async (req, res) => {
       default:
         preferredVoiceKeywords = ['neutral'];
     }
-
-    console.log(`[Ambience AI] 🗣️ TTS config requested for profile: ${voiceProfile}`);
 
     return res.status(200).json({
       success: true,

@@ -14,20 +14,21 @@ function detectLanguage(message) {
   if (hindiPattern.test(text) || text.match(/\b(namaste|shukriya|kya|hai|kaha)\b/)) return 'hindi';
   if (text.match(/\b(hi|hello|hey|thanks|bye|what|where|show|find|add)\b/)) return 'english';
   
-  return 'english'; // Default
+  return 'english';
 }
 
 // 2. Classify intent
 function classifyIntent(text) {
   const patterns = {
-    GREETING: /hi|hello|namaste|vanakkam|namaskaram|hai|helo/i,
+    GREETING: /\b(hi|hello|namaste|vanakkam|namaskaram|hai|helo|hey|yo|sup)\b/i,
     ORDER_STATUS: /where's my order|track order|मेरा आर्डर कहाँ है|என் ஆர்டர் எங்கே|എന്റെ ഓർഡർ എവിടെ|where is my order|order status/i,
-    PRODUCT_SEARCH: /show me|find|दिखाओ|காட்டு|കാണിക്കൂ|i want|looking for|search/i,
+    PRODUCT_SEARCH: /show me|find|दिखाओ|காட்டு|കാണിക്കൂ|i want|looking for|search|வேணும்|give me|get me/i,
     CART_ACTION: /add to cart|show cart|remove from cart|कार्ट में डालो|checkout|clear cart/i,
     FAQ: /return policy|shipping time|contact|payment methods|refund|delivery time|policy/i,
     PRICE_FILTER: /under \d+|below \d+|cheap|expensive|से कम|सस्ता|महंगा|വിലകുറഞ്ഞ/i,
     COMPARISON: /compare|which is better|difference between/i,
-    THANKS: /thank you|धन्यवाद|நன்றி|നന്ദി|thanks|shukriya/i,
+    NAVIGATE: /go to|take me|open|navigate|போ|திற|जाओ|खोलो|shop page|cart page/i,
+    THANKS: /thank you|धन्यवाद|நன்றி|നന്ദி|thanks|shukriya/i,
     GOODBYE: /bye|goodbye|alvida|போய் வருகிறேன்|പോകുന്നു/i,
     HELP: /help|what can you do|how does this work|सहायता|உதவி|സഹായം/i
   };
@@ -48,8 +49,8 @@ function extractEntities(text) {
     brand: null
   };
 
-  const categories = ['shirts', 'shoes', 'watches', 'bags', 'perfumes', 'electronics', 'cosmetics'];
-  const colors = { red: 'red', blue: 'blue', black: 'black', white: 'white', 'लाल': 'red', 'काला': 'black', 'நீலம்': 'blue', 'ചുവപ്പ്': 'red' };
+  const categories = ['shirts', 'shoes', 'watches', 'bags', 'perfumes', 'electronics', 'cosmetics', 'laptop', 'phone'];
+  const colors = { red: 'red', blue: 'blue', black: 'black', white: 'white', 'லாल்': 'red', 'काला': 'black', 'நீலம்': 'blue', 'ചുவപ്പ്': 'red' };
   const genders = { men: 'men', women: 'women', kids: 'kids', 'पुरुष': 'men', 'महिला': 'women' };
 
   for (const cat of categories) {
@@ -70,63 +71,63 @@ function extractEntities(text) {
   return entities;
 }
 
-// 4 & 7. Generate responses and FAQ knowledge base
+// 4. Warm, human-like response templates
 const responses = {
   english: {
-    GREETING: "Hello! Welcome to Ambience. How can I assist you today?",
-    THANKS: "You're welcome! Let me know if you need anything else.",
-    GOODBYE: "Goodbye! Have a great day.",
-    HELP: "I can help you find products, track your orders, and answer questions about our policies.",
-    FAQ_RETURN: "We have a 30-day easy returns policy.",
-    FAQ_SHIPPING: "We offer free shipping above ₹999. It usually takes 3-5 business days.",
-    FAQ_PAYMENT: "We accept COD, UPI, Cards, and Net Banking.",
-    FAQ_CONTACT: "You can reach us at support@ambience.com.",
-    ORDER_FOUND: "Here is your latest order status.",
-    ORDER_NOT_FOUND: "I couldn't find any recent orders for you.",
-    PRODUCT_FOUND: "Here are some products you might like.",
-    PRODUCT_NOT_FOUND: "Sorry, I couldn't find any products matching your criteria."
+    GREETING: "Hey! Welcome to Ambience! What are you in the mood to explore today?",
+    THANKS: "Anytime! Hit me up if you need anything else.",
+    GOODBYE: "Catch you later! Happy shopping! ✌️",
+    HELP: "I can help you find products, track orders, navigate the store, and answer any questions. Just ask!",
+    FAQ_RETURN: "Easy peasy — we've got a 30-day returns policy. No drama.",
+    FAQ_SHIPPING: "Free shipping on orders above ₹999! Usually arrives in 3-5 business days.",
+    FAQ_PAYMENT: "We've got you covered — COD, UPI, Cards, and Net Banking all work.",
+    FAQ_CONTACT: "Drop us a line at support@ambience.com — we're super responsive!",
+    ORDER_FOUND: "Found your latest order! Here's the status.",
+    ORDER_NOT_FOUND: "Hmm, I don't see any recent orders on your account.",
+    PRODUCT_FOUND: "Ooh, check these out — I think you'll love them!",
+    PRODUCT_NOT_FOUND: "Couldn't find an exact match, but let me know more and I'll dig deeper!"
   },
   hindi: {
-    GREETING: "नमस्ते! Ambience में आपका स्वागत है। मैं आज आपकी कैसे सहायता कर सकता हूँ?",
-    THANKS: "आपका स्वागत है! यदि आपको कुछ और चाहिए तो मुझे बताएं।",
-    GOODBYE: "अलविदा! आपका दिन शुभ हो।",
-    HELP: "मैं आपको उत्पाद खोजने, आपके ऑर्डर को ट्रैक करने और हमारी नीतियों के बारे में सवालों के जवाब देने में मदद कर सकता हूं।",
-    FAQ_RETURN: "हमारी 30-दिन की आसान रिटर्न पॉलिसी है।",
-    FAQ_SHIPPING: "हम ₹999 से ऊपर मुफ्त शिपिंग प्रदान करते हैं। इसमें आमतौर पर 3-5 कार्यदिवस लगते हैं।",
-    FAQ_PAYMENT: "हम COD, UPI, Cards और Net Banking स्वीकार करते हैं।",
-    FAQ_CONTACT: "आप हमसे support@ambience.com पर संपर्क कर सकते हैं।",
-    ORDER_FOUND: "यहां आपके नवीनतम ऑर्डर की स्थिति है।",
-    ORDER_NOT_FOUND: "मुझे आपके लिए कोई हालिया ऑर्डर नहीं मिला।",
-    PRODUCT_FOUND: "यहां कुछ उत्पाद दिए गए हैं जो आपको पसंद आ सकते हैं।",
-    PRODUCT_NOT_FOUND: "क्षमा करें, मुझे आपके मानदंडों से मेल खाने वाले कोई उत्पाद नहीं मिले।"
+    GREETING: "हेलो! Ambience में आपका स्वागत है! आज कुछ खास ढूंढ रहे हो?",
+    THANKS: "कोई बात नहीं! और कुछ चाहिए तो बोलो!",
+    GOODBYE: "बाय! Happy shopping! ✌️",
+    HELP: "मैं प्रोडक्ट्स ढूंढने, ऑर्डर ट्रैक करने, और सवालों के जवाब देने में हेल्प कर सकता हूँ।",
+    FAQ_RETURN: "30 दिन की आसान रिटर्न पॉलिसी है — कोई झंझट नहीं।",
+    FAQ_SHIPPING: "₹999 से ऊपर फ्री शिपिंग! 3-5 दिन में मिल जाता है।",
+    FAQ_PAYMENT: "COD, UPI, Cards, Net Banking — सब चलता है!",
+    FAQ_CONTACT: "support@ambience.com पर मैसेज करो — जल्दी रिप्लाई आएगा!",
+    ORDER_FOUND: "तुम्हारा लेटेस्ट ऑर्डर मिल गया! ये रहा स्टेटस।",
+    ORDER_NOT_FOUND: "हम्म, तुम्हारे अकाउंट पर कोई रीसेंट ऑर्डर नहीं दिख रहा।",
+    PRODUCT_FOUND: "ये देखो — मुझे लगता है ये तुम्हें पसंद आएंगे!",
+    PRODUCT_NOT_FOUND: "एक्जैक्ट मैच नहीं मिला, लेकिन और बताओ तो और ढूंढता हूँ!"
   },
   malayalam: {
-    GREETING: "നമസ്കാരം! ആംബിയൻസിലേക്ക് സ്വാഗതം. എനിക്ക് നിങ്ങളെ എങ്ങനെ സഹായിക്കാനാകും?",
-    THANKS: "സ്വാഗതം! മറ്റെന്തെങ്കിലും വേണമെങ്കിൽ പറയുക.",
-    GOODBYE: "വിട! നല്ലൊരു ദിവസം ആശംസിക്കുന്നു.",
-    HELP: "ഉൽപ്പന്നങ്ങൾ കണ്ടെത്താനും ഓർഡറുകൾ ട്രാക്ക് ചെയ്യാനും സംശയങ്ങൾക്ക് മറുപടി നൽകാനും എനിക്ക് കഴിയും.",
-    FAQ_RETURN: "ഞങ്ങൾക്ക് 30-ദിവസത്തെ എളുപ്പത്തിലുള്ള റിട്ടേൺ പോളിസി ഉണ്ട്.",
-    FAQ_SHIPPING: "₹999-ന് മുകളിലുള്ള ഓർഡറുകൾക്ക് സൗജന്യ ഷിപ്പിംഗ്. 3-5 ദിവസങ്ങൾക്കുള്ളിൽ ലഭിക്കും.",
-    FAQ_PAYMENT: "COD, UPI, Cards, Net Banking എന്നിവ സ്വീകരിക്കും.",
-    FAQ_CONTACT: "support@ambience.com എന്ന വിലാസത്തിൽ ബന്ധപ്പെടുക.",
-    ORDER_FOUND: "നിങ്ങളുടെ അവസാനത്തെ ഓർഡർ വിവരങ്ങൾ ഇതാ.",
-    ORDER_NOT_FOUND: "നിങ്ങളുടെ പേരിലുള്ള പുതിയ ഓർഡറുകളൊന്നും കണ്ടെത്താനായില്ല.",
-    PRODUCT_FOUND: "നിങ്ങൾക്ക് ഇഷ്ടപ്പെട്ടേക്കാവുന്ന ചില ഉൽപ്പന്നങ്ങൾ ഇതാ.",
-    PRODUCT_NOT_FOUND: "നിങ്ങൾ തിരഞ്ഞ ഉൽപ്പന്നങ്ങൾ കണ്ടെത്താനായില്ല."
+    GREETING: "ഹായ്! ആംബിയൻസിലേക്ക് സ്വാഗതം! ഇന്ന് എന്താ നോക്കുന്നത്?",
+    THANKS: "എപ്പോഴും! വേറെ എന്തെങ്കിലും വേണേൽ പറ!",
+    GOODBYE: "ബൈ! Happy shopping! ✌️",
+    HELP: "ഉൽപ്പന്നങ്ങൾ കണ്ടെത്താനും ഓർഡറുകൾ ട്രാക്ക് ചെയ്യാനും ചോദ്യങ്ങൾക്ക് ഉത്തരം നൽകാനും എനിക്ക് കഴിയും.",
+    FAQ_RETURN: "30 ദിവസത്തെ ഈസി റിട്ടേൺ പോളിസി ഉണ്ട് — ടെൻഷൻ വേണ്ട.",
+    FAQ_SHIPPING: "₹999-ന് മുകളിൽ ഫ്രീ ഷിപ്പിംഗ്! 3-5 ദിവസത്തിനുള്ളിൽ കിട്ടും.",
+    FAQ_PAYMENT: "COD, UPI, Cards, Net Banking — എല്ലാം ആക്സെപ്റ്റ് ചെയ്യും.",
+    FAQ_CONTACT: "support@ambience.com-ലേക്ക് മെസ്സേജ് അയയ്ക്കൂ — ക്വിക്ക് റിപ്ലൈ ഉറപ്പ്!",
+    ORDER_FOUND: "നിന്റെ ലേറ്റസ്റ്റ് ഓർഡർ കണ്ടെത്തി! ഇതാ സ്റ്റാറ്റസ്.",
+    ORDER_NOT_FOUND: "ഹ്മ്മ്, നിന്റെ അക്കൗണ്ടിൽ റീസെന്റ് ഓർഡറുകളൊന്നും കാണുന്നില്ല.",
+    PRODUCT_FOUND: "ഇതൊന്ന് നോക്ക് — ഇഷ്ടപ്പെടും എന്ന് എനിക്ക് ഉറപ്പാണ്!",
+    PRODUCT_NOT_FOUND: "എക്സാക്ട്ട് മാച്ച് കിട്ടിയില്ല, പക്ഷേ കൂടുതൽ പറഞ്ഞാൽ ഞാൻ ഇനിയും തിരയാം!"
   },
   tamil: {
-    GREETING: "வணக்கம்! ஆம்பியன்ஸ்க்கு உங்களை வரவேற்கிறோம். இன்று நான் உங்களுக்கு எப்படி உதவ முடியும்?",
-    THANKS: "நன்றி! உங்களுக்கு வேறு ஏதாவது தேவைப்பட்டால் சொல்லுங்கள்.",
-    GOODBYE: "போய் வருகிறேன்! இனிய நாளாக அமையட்டும்.",
-    HELP: "தயாரிப்புகளைக் கண்டறியவும், ஆர்டர்களைக் கண்காணிக்கவும், எங்கள் கொள்கைகள் பற்றி அறியவும் நான் உதவ முடியும்.",
-    FAQ_RETURN: "நாங்கள் 30-நாள் எளிதான திரும்பப் பெறும் கொள்கையைக் கொண்டுள்ளோம்.",
-    FAQ_SHIPPING: "₹999 க்கு மேல் இலவச ஷிப்பிங் வழங்குகிறோம். இது பொதுவாக 3-5 வணிக நாட்கள் ஆகும்.",
-    FAQ_PAYMENT: "நாங்கள் COD, UPI, Cards மற்றும் Net Banking ஐ ஏற்கிறோம்.",
-    FAQ_CONTACT: "support@ambience.com இல் எங்களைத் தொடர்பு கொள்ளலாம்.",
-    ORDER_FOUND: "உங்கள் சமீபத்திய ஆர்டர் நிலை இதோ.",
-    ORDER_NOT_FOUND: "மன்னிக்கவும், சமீபத்திய ஆர்டர்கள் எதுவும் கிடைக்கவில்லை.",
-    PRODUCT_FOUND: "நீங்கள் விரும்பக்கூடிய சில தயாரிப்புகள் இங்கே.",
-    PRODUCT_NOT_FOUND: "மன்னிக்கவும், உங்கள் தேடலுக்குப் பொருந்தும் தயாரிப்புகள் எதுவும் இல்லை."
+    GREETING: "ஹேய்! ஆம்பியன்ஸுக்கு வரவேற்கிறோம்! இன்னைக்கு என்ன பாக்கணும்?",
+    THANKS: "எப்பவும்! வேற ஏதாவது வேணும்னா சொல்லுங்க!",
+    GOODBYE: "பை! Happy shopping! ✌️",
+    HELP: "ப்ராடக்ட்ஸ் தேட, ஆர்டர் ட்ராக் பண்ண, எந்த கேள்விக்கும் பதில் சொல்ல நான் ரெடி!",
+    FAQ_RETURN: "30 நாள் ஈஸி ரிட்டர்ன் பாலிசி இருக்கு — டென்ஷன் இல்ல.",
+    FAQ_SHIPPING: "₹999 மேல இலவச ஷிப்பிங்! 3-5 நாளுல வந்துடும்.",
+    FAQ_PAYMENT: "COD, UPI, Cards, Net Banking — எல்லாம் ஓகே!",
+    FAQ_CONTACT: "support@ambience.com-ல மெசேஜ் பண்ணுங்க — சீக்கிரமே ரிப்ளை வரும்!",
+    ORDER_FOUND: "உங்க லேட்டஸ்ட் ஆர்டர் கிடைச்சது! ஸ்டேட்டஸ் இதோ.",
+    ORDER_NOT_FOUND: "ஹ்ம்ம், உங்க அக்கவுண்ட்ல ரீசென்ட் ஆர்டர் எதுவும் இல்ல.",
+    PRODUCT_FOUND: "இத பாருங்க — உங்களுக்கு பிடிக்கும்னு நினைக்கிறேன்!",
+    PRODUCT_NOT_FOUND: "எக்ஸாக்ட் மேட்ச் கிடைக்கல, ஆனா இன்னும் சொன்னா தேடறேன்!"
   }
 };
 
@@ -136,7 +137,6 @@ exports.processLocally = async (message, user, recentOrders, conversationHistory
     const lang = detectLanguage(message);
     const intent = classifyIntent(text);
     
-    // Fallback to english if language responses don't exist
     const langResponses = responses[lang] || responses['english'];
 
     const responseTemplate = {
@@ -149,7 +149,6 @@ exports.processLocally = async (message, user, recentOrders, conversationHistory
     };
 
     // ONLY handle trivial social intents locally.
-    // ALL product queries, FAQs, orders, and complex natural language go to LLM.
     if (intent === 'GREETING') {
       responseTemplate.text = langResponses.GREETING;
       responseTemplate.emotion = "happy";
@@ -167,22 +166,28 @@ exports.processLocally = async (message, user, recentOrders, conversationHistory
       return responseTemplate;
     }
 
-    // Everything else (PRODUCT_SEARCH, ORDER_STATUS, FAQ, HELP, PRICE_FILTER, etc.)
-    // goes to the LLM waterfall for intelligent, conversational handling.
+    // Everything else goes to the LLM waterfall.
     return null;
 
   } catch (error) {
     console.error("[Local NLP] Error processing:", error);
-    return null; // Fallback to LLM on error
+    return null;
   }
 };
 
+// Smart fallback — NEVER shows connectivity errors
 exports.getFallbackResponse = (message, lang) => {
   const langResponses = responses[lang] || responses['english'];
+  const fallbacks = {
+    english: "I'm thinking about this one — could you rephrase that a bit? I want to give you the best answer!",
+    tamil: "ஒரு நிமிஷம் — இன்னொரு தடவை கேளுங்க, சரியா பதில் சொல்றேன்!",
+    malayalam: "ഒരു നിമിഷം — ഒന്നുകൂടി ചോദിക്കൂ, നല്ല ഉത്തരം തരാം!",
+    hindi: "एक सेकंड — दोबारा पूछो, बेस्ट जवाब दूँगा!"
+  };
   return {
-    text: "I'm having a little trouble connecting right now, but I'm still here to help! Please try again in a moment.",
+    text: fallbacks[lang] || fallbacks.english,
     actions: [],
-    emotion: "empathetic",
+    emotion: "thinking",
     suggestedProducts: [],
     language: lang,
     handledLocally: true
