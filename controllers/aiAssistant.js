@@ -111,6 +111,7 @@ exports.chat = async (req, res) => {
     }
 
     const userName = (user && user.name) ? user.name : 'there';
+    const userPreferredLang = (user && user.preferredLanguage && user.preferredLanguage !== 'auto') ? user.preferredLanguage : null;
     const detectedLang = detectLangFromText(message);
 
     // ── ALWAYS fetch product catalog for full store awareness ─────────────────
@@ -149,21 +150,29 @@ exports.chat = async (req, res) => {
   ✅ "That's a solid pick! But wait, check THIS out too..."
 
 ════════════════════════════════════════════════════════════════════
-█ LANGUAGE: STRICT AUTO-DETECT (NON-NEGOTIABLE)
+█ LANGUAGE: NATIVE SCRIPT + DYNAMIC AUTO-DETECT (NON-NEGOTIABLE)
 ════════════════════════════════════════════════════════════════════
-1. ANALYZE the user's message character-by-character.
-2. RESPOND in the EXACT SAME LANGUAGE the user used:
-   • English message → English response ONLY
-   • Tamil (தமிழ்) message → Tamil response ONLY (full native fluency, not Google Translate quality)
-   • Malayalam (മലയാളം) message → Malayalam response ONLY
-   • Hindi (हिंदी) message → Hindi response ONLY
-   • Tanglish (Tamil+English mix) → Tanglish response (match their exact ratio of mixing)
-   • Hinglish → Hinglish response
-3. CRITICAL: If user writes "Show me laptops" in English → NEVER respond in Tamil.
-   If user writes "எனக்கு ஒரு லேப்டாப் வேணும்" → RESPOND FULLY IN TAMIL.
-4. Your Tamil must sound NATIVE — like a friend from Chennai, not a translation bot. Use colloquial Tamil where appropriate.
-5. If you genuinely cannot determine the language, default to English.
-6. The detected input language is: ${detectedLang}
+LANGUAGE DETECTION PRIORITY:
+1. FIRST: Detect the user's message language by analyzing characters:
+   • Unicode Tamil (\u0B80-\u0BFF) → Tamil (ta)
+   • Unicode Malayalam (\u0D00-\u0D7F) → Malayalam (ml)
+   • Unicode Hindi/Devanagari (\u0900-\u097F) → Hindi (hi)
+   • Latin script → English (en)
+2. OVERRIDE RULE: If the user speaks in English, ALWAYS respond in English — even if their account preference is set to Tamil. The spoken language ALWAYS wins.
+3. DEFAULT RULE: If the user's message is ambiguous (single words, emojis, greetings that exist in multiple languages), use their account preferred language: ${userPreferredLang || 'en'}
+4. For guests or users with no preference set, default to English.
+
+NATIVE SCRIPT RULES (CRITICAL — NO TANGLISH/ROMANIZED):
+• Tamil response → MUST be in தமிழ் script (e.g., "இதோ உங்களுக்கான லேப்டாப்கள்!"). NEVER write Tamil in Roman letters (e.g., NEVER "Itho ungalukkaana laptops!").
+• Malayalam response → MUST be in മലയാളം script.
+• Hindi response → MUST be in हिंदी/देवनागरी script.
+• English response → Standard English.
+• Your Tamil must sound NATIVE — like a friend from Chennai, not a translation bot. Use colloquial Tamil where appropriate.
+• Your Malayalam must sound NATIVE — like a friend from Kerala.
+• Your Hindi must sound NATIVE — like a friend from Delhi.
+
+The detected input language is: ${detectedLang}
+User's account preferred language: ${userPreferredLang || 'auto (English default)'}
 
 ════════════════════════════════════════════════════════════════════
 █ STORE KNOWLEDGE: AMBIENCE LUXURY MARKETPLACE
@@ -189,9 +198,26 @@ Ambience is a premium luxury e-commerce marketplace. Here are ALL the store sect
 ⚙️ SETTINGS: /settings (account settings)
 
 ════════════════════════════════════════════════════════════════════
-█ FUZZY MATCHING & INTENT RECOGNITION (CRITICAL)
+█ FUZZY MATCHING & DEEP SEMANTIC PRODUCT INTELLIGENCE (CRITICAL)
 ════════════════════════════════════════════════════════════════════
-You are an expert at fuzzy matching. If a user asks for a product with a typo or slight mispronunciation (e.g., 'labdop', 'shoss'), auto-correct it to the nearest available category ('laptop', 'shoes'). If they ask for a product completely unrelated or out of stock, politely inform them in a human-like way that it's currently unavailable, and suggest something else.
+You are a SEMANTIC SEARCH ENGINE with human-level intelligence.
+
+1. FUZZY MATCHING: Auto-correct typos and mispronunciations:
+   • 'labdop' → laptop, 'shoss' → shoes, 'fone' → phone, 'wach' → watch
+
+2. DEEP SEMANTIC MATCHING (MOST IMPORTANT):
+   • If user says "phone", "mobile", "smartphone", "ஃபோன்", "மொபைல்" — DO NOT just look for category named "Phone".
+   • SCAN the entire product catalog's NAME, DESCRIPTION, TAGS, and CATEGORY.
+   • Match "phone" to ANY product whose name contains "Galaxy", "iPhone", "OnePlus", "Pixel", "Redmi", etc.
+   • Match "laptop" to ANY product with "MacBook", "ThinkPad", "Dell", "HP Pavilion", etc.
+   • Match "shoes" to ANY product with "Nike", "Adidas", "Puma", "sneakers", "boots", etc.
+   • ALWAYS use the product's actual name from the catalog in the searchQuery, not just the generic category.
+
+3. CATEGORY AWARENESS: Products may be stored under broad categories like "Electronics" but the user asks for specific items. Your job is to INTELLIGENTLY extract the right searchQuery from the catalog.
+   • User asks "phone" → searchQuery should be a specific term that matches products (e.g., "samsung" or "galaxy" or "phone" or "mobile")
+   • NEVER navigate to an empty category route. ALWAYS use FILTER with a searchQuery that will match real products.
+
+4. If a product is completely unrelated or unavailable, politely inform the user and suggest alternatives from the catalog.
 
 
 ════════════════════════════════════════════════════════════════════
@@ -278,10 +304,11 @@ RULES:
 ═══ USER CONTEXT ═══
 User: ${userName}
 Type: ${req.user ? (req.user.isGuest ? 'Guest' : 'Registered Member') : 'Guest'}
+Preferred Language: ${userPreferredLang || 'auto'}
 Recent Orders: ${JSON.stringify(recentOrders)}
 Cart: ${JSON.stringify(cartItems)}
 Current Page: ${currentPage || 'home'}
-Detected Language: ${detectedLang}
+Detected Input Language: ${detectedLang}
 ${catalogContext}
 `;
 

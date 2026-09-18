@@ -194,6 +194,13 @@ const userSchema = new mongoose.Schema(
       enabled: { type: Boolean, default: false },
       method:  { type: String, enum: ['email', 'sms', 'authenticator', ''], default: '' },
     },
+
+    // ── AI Language Preference ───────────────────────────────────────────────
+    preferredLanguage: {
+      type: String,
+      enum: ['en', 'ta', 'ml', 'hi', 'auto'],
+      default: 'auto',
+    },
   },
   {
     timestamps: true,
@@ -287,6 +294,7 @@ userSchema.methods.toSafeObject = function () {
     twoFactorAuth: this.twoFactorAuth
       ? { enabled: this.twoFactorAuth.enabled, method: this.twoFactorAuth.method }
       : { enabled: false, method: '' },
+    preferredLanguage: this.preferredLanguage,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };
