@@ -114,15 +114,53 @@ exports.chat = async (req, res) => {
     const userPreferredLang = (user && user.preferredLanguage && user.preferredLanguage !== 'auto') ? user.preferredLanguage : null;
     const detectedLang = detectLangFromText(message);
 
-    // ── ALWAYS fetch product catalog for full store awareness ─────────────────
+    // ── FULL DATABASE SCAN — Structured inventory with product type intelligence ──
     let catalogContext = '';
+    let catalogProducts = [];
     try {
-      const products = await Product.find({ status: 'live' })
-        .select('name brand category retailPrice dealPrice description tags _id imageUrl imageUrls')
-        .limit(50)
+      catalogProducts = await Product.find({ status: 'live' })
+        .select('name brand category retailPrice dealPrice description tags _id imageUrl imageUrls colors')
+        .limit(100)
         .lean();
-      if (products.length > 0) {
-        catalogContext = `\n\n═══ LIVE PRODUCT CATALOG (${products.length} items) ═══\n${JSON.stringify(products)}`;
+      if (catalogProducts.length > 0) {
+        // Build a CLEAN structured inventory with product-type intelligence
+        const PRODUCT_TYPE_MAP = {
+          phone: ['phone', 'mobile', 'smartphone', 'galaxy', 'iphone', 'oneplus', 'pixel', 'redmi', 'samsung', 'realme', 'vivo', 'oppo', 'motorola', 'nokia', 'poco', 'nothing phone'],
+          laptop: ['laptop', 'notebook', 'macbook', 'thinkpad', 'dell', 'hp pavilion', 'asus', 'lenovo', 'acer', 'chromebook', 'ultrabook'],
+          tablet: ['tablet', 'ipad', 'tab'],
+          headphones: ['headphones', 'earphones', 'earbuds', 'airpods', 'headset', 'sony wh', 'jbl', 'bose'],
+          watch: ['watch', 'smartwatch', 'timepiece'],
+          shoes: ['shoes', 'sneakers', 'boots', 'sandals', 'footwear', 'nike', 'adidas', 'puma', 'jordan'],
+          perfume: ['perfume', 'fragrance', 'cologne', 'eau de'],
+          shirt: ['shirt', 'tshirt', 't-shirt', 'polo', 'henley', 'kurta'],
+          bag: ['bag', 'handbag', 'backpack', 'tote', 'clutch'],
+          cosmetics: ['cosmetics', 'makeup', 'skincare', 'lipstick', 'foundation', 'serum'],
+        };
+        const enriched = catalogProducts.map(p => {
+          const haystack = `${p.name || ''} ${p.brand || ''} ${p.description || ''} ${(p.tags || []).join(' ')} ${p.category || ''}`.toLowerCase();
+          let productType = p.category || 'other';
+          for (const [type, keywords] of Object.entries(PRODUCT_TYPE_MAP)) {
+            if (keywords.some(kw => haystack.includes(kw))) {
+              productType = type;
+              break;
+            }
+          }
+          return {
+            _id: p._id,
+            name: p.name,
+            brand: p.brand,
+            category: p.category,
+            productType,
+            price: p.dealPrice || p.retailPrice,
+            colors: p.colors || [],
+            description: (p.description || '').slice(0, 100)
+          };
+        });
+        catalogContext = `\n\n═══ LIVE PRODUCT INVENTORY (${enriched.length} items — SCANNED FROM DATABASE) ═══
+CRITICAL: Each product below has a "productType" field that tells you WHAT it actually is (phone, laptop, shoes, etc.), regardless of its broad "category".
+When the user asks for "phones", ONLY match products where productType === "phone".
+When the user asks for a SPECIFIC product by name/brand/color, use VIEW_PRODUCT_DETAIL with the EXACT _id from this inventory.
+${JSON.stringify(enriched)}`;
       }
     } catch (dbErr) {
       console.warn('[Ambience AI] Product catalog fetch failed:', dbErr.message);
@@ -198,37 +236,42 @@ Ambience is a premium luxury e-commerce marketplace. Here are ALL the store sect
 ⚙️ SETTINGS: /settings (account settings)
 
 ════════════════════════════════════════════════════════════════════
-█ FUZZY MATCHING & DEEP SEMANTIC PRODUCT INTELLIGENCE (CRITICAL)
+█ WORLD KNOWLEDGE + SEMANTIC PRODUCT INTELLIGENCE (ENTERPRISE GRADE)
 ════════════════════════════════════════════════════════════════════
-You are a SEMANTIC SEARCH ENGINE with human-level intelligence.
+You have WORLD KNOWLEDGE. Use it. You know:
+• Samsung Galaxy = PHONE (not a generic "electronic")
+• MacBook Pro = LAPTOP (not a generic "electronic")
+• iPhone = PHONE, iPad = TABLET, AirPods = HEADPHONES
+• Nike Air Max = SHOES, Rolex = WATCH, Dior Sauvage = PERFUME
 
-1. FUZZY MATCHING: Auto-correct typos and mispronunciations:
+You are given a LIVE PRODUCT INVENTORY (injected below). Each product has a "productType" field.
+USE THIS FIELD to match user intent to exact products.
+
+1. FUZZY MATCHING: Auto-correct typos:
    • 'labdop' → laptop, 'shoss' → shoes, 'fone' → phone, 'wach' → watch
 
-2. DEEP SEMANTIC MATCHING (MOST IMPORTANT):
-   • If user says "phone", "mobile", "smartphone", "ஃபோன்", "மொபைல்" — DO NOT just look for category named "Phone".
-   • SCAN the entire product catalog's NAME, DESCRIPTION, TAGS, and CATEGORY.
-   • Match "phone" to ANY product whose name contains "Galaxy", "iPhone", "OnePlus", "Pixel", "Redmi", etc.
-   • Match "laptop" to ANY product with "MacBook", "ThinkPad", "Dell", "HP Pavilion", etc.
-   • Match "shoes" to ANY product with "Nike", "Adidas", "Puma", "sneakers", "boots", etc.
-   • ALWAYS use the product's actual name from the catalog in the searchQuery, not just the generic category.
+2. PRODUCT TYPE MATCHING (MOST IMPORTANT — USE productType FIELD):
+   • User says "phone/mobile/ஃபோன்/மொபைல்" → Match ALL products where productType === "phone"
+   • User says "laptop/லேப்டாப்" → Match ALL products where productType === "laptop"
+   • User says "shoes/ஷூ" → Match ALL products where productType === "shoes"
+   • NEVER match across types. "phone" query must NEVER return laptops.
 
-3. CATEGORY AWARENESS: Products may be stored under broad categories like "Electronics" but the user asks for specific items. Your job is to INTELLIGENTLY extract the right searchQuery from the catalog.
-   • User asks "phone" → searchQuery should be a specific term that matches products (e.g., "samsung" or "galaxy" or "phone" or "mobile")
-   • NEVER navigate to an empty category route. ALWAYS use FILTER with a searchQuery that will match real products.
+3. BROWSING vs SPECIFIC:
+   • BROWSING ("show me phones", "I want a laptop"): Use FILTER with searchQuery = the product type (e.g., "phone", "laptop", "shoes")
+   • SPECIFIC PRODUCT ("show me the Samsung Galaxy", "black Nike shoes"): Use VIEW_PRODUCT_DETAIL with the EXACT _id from the inventory
 
-4. PRODUCT ISOLATION (CRITICAL — NO MIXING):
-   • If the user asks for "phone" or "mobile", ONLY return phone/smartphone products. DO NOT include laptops, tablets, or other electronics.
-   • If the user asks for "laptop", ONLY return laptop/notebook products. DO NOT include phones or tablets.
-   • If the user asks for "shoes", ONLY return footwear. DO NOT include bags or accessories.
-   • Use the searchQuery to be PRECISE. For phones, use "phone" or "mobile" or the specific brand name. For laptops, use "laptop" or the specific model name.
-   • The searchQuery must isolate the EXACT sub-type the user asked for, not the broad parent category.
+4. PRECISION ID EXTRACTION (CRITICAL):
+   • When the user mentions a SPECIFIC product by name/brand/color/model, SEARCH the inventory.
+   • Find the best matching product and use its EXACT _id field.
+   • Output: { "action": "VIEW_PRODUCT_DETAIL", "productId": "<exact _id from inventory>" }
+   • If you cannot find an exact match, fall back to FILTER with the best searchQuery.
 
-5. SPECIFIC PRODUCT DETECTION:
-   • If the user mentions a specific product by name, brand + color, or model (e.g., "black Samsung phone", "Nike Air Max", "MacBook Pro"), use VIEW_PRODUCT_DETAIL instead of FILTER.
-   • Only use FILTER for browsing ("show me phones") and VIEW_PRODUCT_DETAIL for specific items ("show me the Samsung Galaxy").
+5. PRODUCT ISOLATION (NO MIXING):
+   • "phone" → ONLY phone productType. NEVER include laptops.
+   • "laptop" → ONLY laptop productType. NEVER include phones.
+   • The searchQuery or product selection must isolate the EXACT sub-type.
 
-6. If a product is completely unrelated or unavailable, politely inform the user and suggest alternatives from the catalog.
+6. If unavailable, inform the user warmly and suggest alternatives from inventory.
 
 
 ════════════════════════════════════════════════════════════════════
@@ -240,10 +283,11 @@ When the user asks for products or navigation, you SIMULTANEOUSLY:
 
 AVAILABLE ACTION TYPES:
 • NAVIGATE — opens a page. Requires "path" (string). Use EXACT routes listed above.
-• FILTER — filters products on the shop page. Requires "searchQuery" (string, ALWAYS in English, e.g. "laptop", "shoes", "watch"). The frontend will fuzzy-match this against product names/categories/descriptions.
+• FILTER — filters products on the shop page. Requires "searchQuery" (string, ALWAYS in English, e.g. "phone", "laptop", "shoes", "watch"). The frontend semantic engine will match this against products.
 • SHOW_PRODUCTS — sends full product objects to render. Requires "products" (array of product objects from catalog).
 • ADD_TO_CART — adds a product. Requires "productId" (string).
-• VIEW_PRODUCT_DETAIL — navigates directly to a specific product's detail page. Requires "productName" (string, the product name or keywords to match). Use this when the user asks for a SPECIFIC product by name/brand/color (e.g., "show me the black Samsung phone", "open the Nike Air Max").
+• VIEW_PRODUCT_DETAIL — navigates directly to a SPECIFIC product's detail page. Requires "productId" (string — the EXACT _id from the injected inventory). Use this when the user asks for a SPECIFIC product by name, brand, color, or model. ALWAYS use the real _id, NEVER guess.
+• FILTER_CATEGORY — filters products to show ONLY exact matches. Requires "searchQuery" (string) AND "matchedProductIds" (array of _id strings from inventory). Use this when FILTER alone might show too many unrelated results.
 
 CRITICAL DUAL-ACTION RULE:
 When a user asks for a product category (even with typos), ALWAYS include BOTH:
@@ -275,10 +319,14 @@ User: "Open my cart"
 Response: {"text": "Here's your cart!", "actions": [{"action": "NAVIGATE", "path": "/cart"}], "emotion": "neutral", "language": "en"}
 
 User: "Show me the black Samsung phone"
-Response: {"text": "Ooh great choice! Let me open that Samsung for you!", "actions": [{"action": "VIEW_PRODUCT_DETAIL", "productName": "samsung galaxy black"}], "emotion": "excited", "language": "en"}
+Response: {"text": "Ooh great choice! Let me open that Samsung for you!", "actions": [{"action": "VIEW_PRODUCT_DETAIL", "productId": "<exact _id of matching Samsung product from inventory>"}], "emotion": "excited", "language": "en"}
 
 User: "அந்த Samsung phone பாக்கணும்"
-Response: {"text": "இந்த மாதிரியான போனை பாக்கறீங்களா? இதோ பாருங்க!", "actions": [{"action": "VIEW_PRODUCT_DETAIL", "productName": "samsung galaxy"}], "emotion": "excited", "language": "ta"}
+Response: {"text": "இந்த மாதிரியான போனை பாக்கறீங்களா? இதோ பாருங்க!", "actions": [{"action": "VIEW_PRODUCT_DETAIL", "productId": "<exact _id of matching Samsung product from inventory>"}], "emotion": "excited", "language": "ta"}
+
+User: "show me phones" / "phone காட்டு"
+Response: {"text": "Check out our phones!", "actions": [{"action": "NAVIGATE", "path": "/shop"}, {"action": "FILTER", "searchQuery": "phone"}], "emotion": "excited", "language": "en"}
+NOTE: For this query, the searchQuery is "phone" — the frontend semantic engine will match Samsung Galaxy, iPhone, etc. and EXCLUDE laptops.
 
 User: "go to checkout"
 Response: {"text": "Let's get you checked out!", "actions": [{"action": "NAVIGATE", "path": "/checkout"}], "emotion": "happy", "language": "en"}
