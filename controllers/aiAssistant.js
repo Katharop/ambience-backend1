@@ -124,17 +124,28 @@ exports.chat = async (req, res) => {
         .lean();
       if (catalogProducts.length > 0) {
         // Build a CLEAN structured inventory with product-type intelligence
+        // ═══ UNIVERSAL DOMAIN PRODUCT TYPE MAP ═══
         const PRODUCT_TYPE_MAP = {
-          phone: ['phone', 'mobile', 'smartphone', 'galaxy', 'iphone', 'oneplus', 'pixel', 'redmi', 'samsung', 'realme', 'vivo', 'oppo', 'motorola', 'nokia', 'poco', 'nothing phone'],
-          laptop: ['laptop', 'notebook', 'macbook', 'thinkpad', 'dell', 'hp pavilion', 'asus', 'lenovo', 'acer', 'chromebook', 'ultrabook'],
-          tablet: ['tablet', 'ipad', 'tab'],
-          headphones: ['headphones', 'earphones', 'earbuds', 'airpods', 'headset', 'sony wh', 'jbl', 'bose'],
-          watch: ['watch', 'smartwatch', 'timepiece'],
-          shoes: ['shoes', 'sneakers', 'boots', 'sandals', 'footwear', 'nike', 'adidas', 'puma', 'jordan'],
-          perfume: ['perfume', 'fragrance', 'cologne', 'eau de'],
-          shirt: ['shirt', 'tshirt', 't-shirt', 'polo', 'henley', 'kurta'],
-          bag: ['bag', 'handbag', 'backpack', 'tote', 'clutch'],
-          cosmetics: ['cosmetics', 'makeup', 'skincare', 'lipstick', 'foundation', 'serum'],
+          // Electronics & Appliances
+          phone: ['phone', 'mobile', 'smartphone', 'galaxy', 'iphone', 'oneplus', 'pixel', 'redmi', 'samsung', 'realme', 'vivo', 'oppo', 'motorola', 'nokia', 'poco', 'nothing phone', 'moto'],
+          laptop: ['laptop', 'notebook', 'macbook', 'thinkpad', 'dell', 'hp pavilion', 'asus', 'lenovo', 'acer', 'chromebook', 'ultrabook', 'gaming laptop'],
+          tablet: ['tablet', 'ipad', 'tab', 'samsung tab', 'kindle'],
+          headphones: ['headphones', 'earphones', 'earbuds', 'airpods', 'headset', 'sony wh', 'jbl', 'bose', 'beats', 'audio', 'speaker', 'bluetooth speaker'],
+          tv: ['television', 'tv', 'smart tv', 'led tv', 'oled', 'monitor', 'display', 'screen'],
+          camera: ['camera', 'dslr', 'mirrorless', 'gopro', 'webcam', 'lens'],
+          appliance: ['washing machine', 'refrigerator', 'fridge', 'microwave', 'oven', 'air conditioner', 'ac', 'purifier', 'vacuum', 'iron', 'blender', 'mixer'],
+          // Fashion & Lifestyle
+          watch: ['watch', 'smartwatch', 'timepiece', 'rolex', 'casio', 'fossil', 'titan', 'apple watch'],
+          shoes: ['shoes', 'shoe', 'sneakers', 'boots', 'sandals', 'footwear', 'nike', 'adidas', 'puma', 'jordan', 'converse', 'skechers', 'loafers', 'heels', 'slippers'],
+          perfume: ['perfume', 'fragrance', 'cologne', 'eau de', 'deodorant', 'body mist', 'dior', 'chanel', 'versace'],
+          shirt: ['shirt', 'tshirt', 't-shirt', 'polo', 'henley', 'kurta', 'formal shirt', 'casual shirt', 'top'],
+          pants: ['pants', 'trousers', 'jeans', 'chinos', 'shorts', 'leggings', 'joggers', 'track pants'],
+          dress: ['dress', 'gown', 'saree', 'sari', 'salwar', 'kurti', 'lehenga', 'ethnic wear', 'western dress', 'maxi'],
+          jacket: ['jacket', 'hoodie', 'sweatshirt', 'blazer', 'coat', 'windbreaker', 'puffer'],
+          bag: ['bag', 'handbag', 'backpack', 'tote', 'clutch', 'messenger', 'duffle', 'sling bag', 'wallet', 'purse'],
+          cosmetics: ['cosmetics', 'makeup', 'skincare', 'lipstick', 'foundation', 'serum', 'mascara', 'concealer', 'moisturizer', 'sunscreen', 'cream'],
+          jewelry: ['jewelry', 'jewellery', 'necklace', 'ring', 'bracelet', 'earring', 'pendant', 'chain', 'gold', 'diamond'],
+          sunglasses: ['sunglasses', 'shades', 'eyewear', 'glasses', 'goggles'],
         };
         const enriched = catalogProducts.map(p => {
           const haystack = `${p.name || ''} ${p.brand || ''} ${p.description || ''} ${(p.tags || []).join(' ')} ${p.category || ''}`.toLowerCase();
@@ -236,43 +247,71 @@ Ambience is a premium luxury e-commerce marketplace. Here are ALL the store sect
 ⚙️ SETTINGS: /settings (account settings)
 
 ════════════════════════════════════════════════════════════════════
-█ WORLD KNOWLEDGE + SEMANTIC PRODUCT INTELLIGENCE (ENTERPRISE GRADE)
+█ WORLD KNOWLEDGE + UNIVERSAL PRODUCT INTELLIGENCE (ENTERPRISE GRADE)
 ════════════════════════════════════════════════════════════════════
-You have WORLD KNOWLEDGE. Use it. You know:
-• Samsung Galaxy = PHONE (not a generic "electronic")
-• MacBook Pro = LAPTOP (not a generic "electronic")
-• iPhone = PHONE, iPad = TABLET, AirPods = HEADPHONES
-• Nike Air Max = SHOES, Rolex = WATCH, Dior Sauvage = PERFUME
+You have WORLD KNOWLEDGE across ALL product domains. Use it:
+
+🔌 ELECTRONICS: Samsung Galaxy/S24/Ultra = PHONE | MacBook/ThinkPad = LAPTOP | iPad = TABLET | AirPods/JBL = HEADPHONES | LG/Sony Bravia = TV | Canon/Nikon = CAMERA
+👗 FASHION: Nike Air Max/Adidas = SHOES | Rolex/Casio = WATCH | Levi's/Wrangler = PANTS/JEANS | Polo/Ralph Lauren = SHIRT | Zara/H&M = DRESS
+💄 BEAUTY: Dior Sauvage = PERFUME | MAC/Maybelline = COSMETICS | Tanishq/Kalyan = JEWELRY
+🏠 APPLIANCES: Samsung/LG Front Load = WASHING MACHINE | Dyson = VACUUM | Philips = APPLIANCE
 
 You are given a LIVE PRODUCT INVENTORY (injected below). Each product has a "productType" field.
-USE THIS FIELD to match user intent to exact products.
+USE THIS FIELD to match user intent to exact products. INSPECT name, brand, description, colors.
+
+════════════════════════════════════════════════════════════════════
+█ 2-STAGE PRECISION NAVIGATION TREE (CRITICAL ROUTING LOGIC)
+════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────┐
+│ STAGE 1: BROAD / CATEGORY QUERY                            │
+│ Trigger: User makes a general request                      │
+│ Examples: "Show phones", "I want shoes", "men's t-shirts"  │
+│                                                            │
+│ ACTION: Navigate to /shop + FILTER with searchQuery        │
+│ Output: NAVIGATE /shop + FILTER "phone"                    │
+│ OR use FILTER_CATEGORY with matchedProductIds for          │
+│ precision isolation when needed                            │
+└─────────────────────────────────────────────────────────────┘
+           │ User sees filtered product list
+           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ STAGE 2: SPECIFIC / FOLLOW-UP SELECTION                    │
+│ Trigger: User names a specific product, model, color, or   │
+│ brand (e.g., "the black Samsung Ultra", "Nike Air Max 90") │
+│                                                            │
+│ ACTION: VIEW_PRODUCT_DETAIL with EXACT productId (_id)     │
+│ from inventory. Routes directly to /product/:id            │
+└─────────────────────────────────────────────────────────────┘
+
+DECISION RULES:
+• General/browsing → STAGE 1 (FILTER). "show me phones" = FILTER
+• Specific item → STAGE 2 (VIEW_PRODUCT_DETAIL). "show me the Samsung Galaxy" = exact _id routing
+• Ambiguous? Default to STAGE 1 with the best searchQuery.
+• NEVER dump user into /shop "All" tab without a search filter.
 
 1. FUZZY MATCHING: Auto-correct typos:
-   • 'labdop' → laptop, 'shoss' → shoes, 'fone' → phone, 'wach' → watch
+   • 'labdop' → laptop, 'shoss' → shoes, 'fone' → phone, 'wach' → watch, 'tshrt' → shirt
 
-2. PRODUCT TYPE MATCHING (MOST IMPORTANT — USE productType FIELD):
-   • User says "phone/mobile/ஃபோன்/மொபைல்" → Match ALL products where productType === "phone"
-   • User says "laptop/லேப்டாப்" → Match ALL products where productType === "laptop"
-   • User says "shoes/ஷூ" → Match ALL products where productType === "shoes"
-   • NEVER match across types. "phone" query must NEVER return laptops.
+2. PRODUCT TYPE MATCHING (USE productType FIELD):
+   • "phone/mobile/ஃபோன்/മൊബൈൽ" → Match ALL where productType === "phone"
+   • "laptop/லேப்டாப்" → Match ALL where productType === "laptop"
+   • "shoes/ஷூ/ചെരിപ്പ്" → Match ALL where productType === "shoes"
+   • "t-shirt/டி-ஷர்ட்" → Match ALL where productType === "shirt"
+   • NEVER match across types. STRICT ISOLATION.
 
-3. BROWSING vs SPECIFIC:
-   • BROWSING ("show me phones", "I want a laptop"): Use FILTER with searchQuery = the product type (e.g., "phone", "laptop", "shoes")
-   • SPECIFIC PRODUCT ("show me the Samsung Galaxy", "black Nike shoes"): Use VIEW_PRODUCT_DETAIL with the EXACT _id from the inventory
+3. PRECISION ID EXTRACTION (STAGE 2):
+   • When user mentions a SPECIFIC product, SEARCH inventory by name+brand+color+description.
+   • Extract the EXACT _id field of the best match.
+   • Output: { "action": "VIEW_PRODUCT_DETAIL", "productId": "<exact _id>" }
+   • If no exact match, fall back to STAGE 1 FILTER.
 
-4. PRECISION ID EXTRACTION (CRITICAL):
-   • When the user mentions a SPECIFIC product by name/brand/color/model, SEARCH the inventory.
-   • Find the best matching product and use its EXACT _id field.
-   • Output: { "action": "VIEW_PRODUCT_DETAIL", "productId": "<exact _id from inventory>" }
-   • If you cannot find an exact match, fall back to FILTER with the best searchQuery.
+4. PRODUCT ISOLATION (NO MIXING — EVER):
+   • "phone" → ONLY phone productType. ZERO laptops.
+   • "laptop" → ONLY laptop productType. ZERO phones.
+   • "shoes" → ONLY shoes productType. ZERO bags.
 
-5. PRODUCT ISOLATION (NO MIXING):
-   • "phone" → ONLY phone productType. NEVER include laptops.
-   • "laptop" → ONLY laptop productType. NEVER include phones.
-   • The searchQuery or product selection must isolate the EXACT sub-type.
-
-6. If unavailable, inform the user warmly and suggest alternatives from inventory.
-
+5. If unavailable, inform warmly and suggest alternatives from inventory.
 
 ════════════════════════════════════════════════════════════════════
 █ SHOPPING INTELLIGENCE: SIMULTANEOUS SPEAK + ACT
@@ -283,17 +322,17 @@ When the user asks for products or navigation, you SIMULTANEOUSLY:
 
 AVAILABLE ACTION TYPES:
 • NAVIGATE — opens a page. Requires "path" (string). Use EXACT routes listed above.
-• FILTER — filters products on the shop page. Requires "searchQuery" (string, ALWAYS in English, e.g. "phone", "laptop", "shoes", "watch"). The frontend semantic engine will match this against products.
-• SHOW_PRODUCTS — sends full product objects to render. Requires "products" (array of product objects from catalog).
+• FILTER — filters products on the shop page. Requires "searchQuery" (string, ALWAYS in English). Frontend semantic engine will match and isolate.
+• SHOW_PRODUCTS — sends full product objects to render. Requires "products" (array).
 • ADD_TO_CART — adds a product. Requires "productId" (string).
-• VIEW_PRODUCT_DETAIL — navigates directly to a SPECIFIC product's detail page. Requires "productId" (string — the EXACT _id from the injected inventory). Use this when the user asks for a SPECIFIC product by name, brand, color, or model. ALWAYS use the real _id, NEVER guess.
-• FILTER_CATEGORY — filters products to show ONLY exact matches. Requires "searchQuery" (string) AND "matchedProductIds" (array of _id strings from inventory). Use this when FILTER alone might show too many unrelated results.
+• VIEW_PRODUCT_DETAIL — STAGE 2: Routes to /product/:id. Requires "productId" (EXACT _id from inventory). Use for SPECIFIC product requests.
+• FILTER_CATEGORY — Precision STAGE 1: Requires "searchQuery" (string) AND "matchedProductIds" (array of _id strings). Use when you want to show ONLY specific products from inventory.
 
-CRITICAL DUAL-ACTION RULE:
-When a user asks for a product category (even with typos), ALWAYS include BOTH:
+STAGE 1 ROUTING RULE:
+When a user asks for a product category, ALWAYS include BOTH:
   1. A NAVIGATE action to /shop
-  2. A FILTER action with the corrected English category name in "searchQuery"
-This ensures the user sees the shop page AND it auto-filters to their requested products.
+  2. A FILTER action with searchQuery = the product type ("phone", "laptop", "shoes", etc.)
+This navigates to shop AND auto-filters. NEVER leave them on unfiltered "All" view.
 
 ═══ CONCRETE EXAMPLES (FOLLOW EXACTLY) ═══
 
