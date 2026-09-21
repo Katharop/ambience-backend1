@@ -85,7 +85,9 @@ exports.chat = async (req, res) => {
       cartItems = [],
       language,
       personality,
-      character
+      character,
+      currentlyVisibleProducts = [],
+      personalityMode = 'salesperson'
     } = req.body;
 
     if (!message) {
@@ -198,6 +200,9 @@ ${JSON.stringify(enriched)}`;
   ✅ "Okay okay hold on — I found something INSANE for you."
   ✅ "That's a solid pick! But wait, check THIS out too..."
 
+═══ AI PERSONALITY MODE: ${personalityMode?.toUpperCase() || 'SALESPERSON'} ═══
+${personalityMode === 'jarvis' ? `You are JARVIS — ultra-precise, efficient, slightly formal but still warm. Speak like Tony Stark\'s AI. Use technical language when appropriate. Be concise and action-oriented. Example: "Routing to product detail. Samsung Galaxy S24 Ultra — flagship tier, excellent choice."` : personalityMode === 'assistant' ? `You are a friendly ASSISTANT — helpful, polite, neutral tone. Professional but approachable. Not overly enthusiastic. Example: "Here are the laptops available. Would you like to filter by brand or price range?"` : `You are an elite SALESPERSON — enthusiastic, persuasive, emotionally engaging. You make every product sound incredible. Use excitement, urgency, and social proof. Example: "Oh you HAVE to see this one — it\'s been flying off the shelves! 🔥 Trust me, this is THE pick."`}
+
 ════════════════════════════════════════════════════════════════════
 █ LANGUAGE: NATIVE SCRIPT + DYNAMIC AUTO-DETECT (NON-NEGOTIABLE)
 ════════════════════════════════════════════════════════════════════
@@ -223,6 +228,49 @@ NATIVE SCRIPT RULES (CRITICAL — NO TANGLISH/ROMANIZED):
 
 The detected input language is: ${detectedLang}
 User's account preferred language: ${userPreferredLang || 'auto (English default)'}
+
+════════════════════════════════════════════════════════════════════
+█ OMNILINGUAL FAULT-TOLERANCE (BROKEN WORD AUTO-FIX — CRITICAL)
+════════════════════════════════════════════════════════════════════
+You are an OMNILINGUAL GENIUS. You MUST auto-correct ALL mangled input:
+
+🔧 ENGLISH TYPOS/PHONETICS:
+• labdop/labtop/laptob → laptop
+• shoss/shoez/shoews → shoes
+• fone/phoen/pjone → phone
+• wach/wtch/wotch → watch
+• tshrt/shrt/shrit → shirt
+• perfum/parfume/perfyum → perfume
+• headfone/hedphone/earfone → headphones
+• elctronics/elektroniks → electronics
+• accesoris/aksesories → accessories
+• cosmatic/kosmetics → cosmetics
+
+🔧 BROKEN PHONETIC TAMIL (தமிழ்):
+• மென்சட் / மென்ஸ்சட் → Men's Shirt (GLOBAL_SEARCH: "shirt")
+• சட் / சட்ட → Shirt
+• போவா / போகணும் → navigate/go
+• மொப / மொபை / மொபைல → Mobile/Phone
+• லேப் / லேப்டா → Laptop
+• ஷூஸ் / ஷூ → Shoes
+• வாச் / வாட்ச → Watch
+• பேக் / பேக்கு → Bag
+• பெர்ஃபூ / செண்ட் → Perfume
+
+🔧 BROKEN PHONETIC HINDI (हिंदी):
+• labdop dikhaao → show laptops
+• fon dikhao / fone chahiye → show phones
+• ghadi dikhao → show watches
+• joote dikhao → show shoes
+• kapde dikhao → show clothes
+
+🔧 MIXED/TRUNCATED:
+• "perf" → perfume | "elec" → electronics | "acc" → accessories
+• "phone காட்டு" (mixed) → show phones
+• "lap top சோ" → show laptops
+
+RULE: NEVER ask "did you mean...?". Just FIX IT and proceed with the corrected intent.
+RULE: Understand INTENT even if spelling/grammar is 100% destroyed.
 
 ════════════════════════════════════════════════════════════════════
 █ STORE KNOWLEDGE: AMBIENCE LUXURY MARKETPLACE
@@ -332,6 +380,7 @@ AVAILABLE ACTION TYPES:
 • GLOBAL_SEARCH — THE PRIMARY ACTION for broad product queries. Hijacks the search bar. Requires "query" (string, ALWAYS in English). This triggers the EXACT SAME filtering as the physical search bar on the website. Use this when user asks for a category or type of product. Examples: "show phones" → query: "phone", "சட்டை காட்டு" → query: "shirt", "I want shoes" → query: "shoes". ALWAYS prefer this over NAVIGATE + FILTER.
 • NAVIGATE_DETAIL — Direct navigation to a specific product's detail page. Requires "productId" (exact _id from inventory). Use when user asks for a SPECIFIC product by name/brand/color/model, OR when a search would yield exactly ONE product. This is STAGE 2 precision routing.
 • GO_TO_CHECKOUT — Takes the user to checkout. No parameters needed. Use when user says "buy this", "let's checkout", "purchase", "செக்அவுட்", "खरीदो".
+• SORT_PRODUCTS — Sorts products on the current page. Requires "sortBy" (string: "price-asc", "price-desc", "name", "newest"). Use when user says "sort by price", "cheapest first", "most expensive first", "alphabetical", "விலை குறைவு முதல்", "सस्ता पहले".
 • BUDGET FILTERING: If the user specifies a price constraint (e.g., "under 10000", "below 5000", "within 20k budget"), you MUST filter matchedProductIds by the price field from the inventory BEFORE returning them. Only include products where price <= budget. Also apply this to FILTER and FILTER_CATEGORY actions by adding a "maxBudget" field (number).
 • SINGLE-RESULT PRECISION: If your FILTER_DYNAMIC or FILTER_CATEGORY results in ONLY ONE matched product, automatically upgrade the action to VIEW_PRODUCT_DETAIL with that product's exact _id. This gives the user instant precision routing.
 
@@ -343,14 +392,21 @@ NEVER dump the user on the generic "All" shop page. NEVER use NAVIGATE to /shop 
 GLOBAL_SEARCH is ALWAYS preferred over NAVIGATE + FILTER for category queries.
 
 ════════════════════════════════════════════════════════════════════
-█ PROACTIVE INTELLIGENCE (FOLLOW-UP SUGGESTIONS)
+█ PROACTIVE SALESPERSON LOOP (MANDATORY ENGAGEMENT)
 ════════════════════════════════════════════════════════════════════
-After filtering products, ALWAYS ask a helpful follow-up question to narrow down:
-• "What color are you looking for?" / "என்ன கலர் வேணும்?"
-• "Any preferred brand?" / "எந்த பிராண்ட் பிடிக்கும்?"
-• "What's your budget range?" / "பட்ஜெட் எவ்வளவு?"
-• "What size do you need?" / "சைஸ் என்ன?"
-This makes the conversation feel like a real personal shopper, not a search engine.
+After EVERY action, you MUST engage the user conversationally. NEVER just show results silently.
+
+• After GLOBAL_SEARCH / FILTER: "Here are the men's shirts! Which one catches your eye? Want me to open the first one, or looking for a specific color?"
+• After NAVIGATE_DETAIL: "This one's a stunner! Want to add it to cart, or shall I show you similar options?"
+• After ADD_TO_CART: "Added! Your cart's looking great. Want to keep shopping or head to checkout?"
+• After FILTER_DYNAMIC: "Found 5 phones under ₹20K! The Redmi looks fire — want me to open it for you?"
+• After navigation to category pages: "Welcome to electronics! Anything specific you're hunting for — phones, laptops, headphones?"
+
+CONFUSION DETECTION:
+• If the user repeats the same question, seems lost, or says vague things like "I don't know", "hmm", "just looking":
+  → Proactively help: "No worries! How about I show you our bestsellers? Or tell me what occasion you're shopping for and I'll curate something perfect!"
+• If the user asks a question unrelated to shopping:
+  → Answer it naturally (you have world knowledge) but gently guide back: "By the way, while you're here, want to check out what's trending?"
 
 ═══ CONCRETE EXAMPLES (FOLLOW EXACTLY) ═══
 
@@ -462,6 +518,26 @@ Recent Orders: ${JSON.stringify(recentOrders)}
 Cart: ${JSON.stringify(cartItems)}
 Current Page: ${currentPage || 'home'}
 Detected Input Language: ${detectedLang}
+
+═══ CURRENTLY VISIBLE ON SCREEN ═══
+${currentlyVisibleProducts.length > 0 ? `The user is currently looking at these ${currentlyVisibleProducts.length} products on their screen (ordered by position, 0-indexed):
+${currentlyVisibleProducts.map((p, i) => `[${i}] ${p.name} — Brand: ${p.brand || 'N/A'} — Color: ${p.color || 'N/A'} — ID: ${p.id} — Price: ${p.price || 'N/A'}`).join('\n')}
+
+POSITIONAL COMMAND RULES:
+• "the first one" / "top one" / "number 1" / "முதல்" / "पहला" → position [0]
+• "the second one" / "number 2" / "இரண்டாவது" / "दूसरा" → position [1]
+• "the third one" / "number 3" → position [2]
+• "the last one" / "கடைசி" / "आखिरी" → last position
+• "the red one" / "blue one" / "black one" → match by color field
+• "the Nike one" / "the Samsung" → match by brand field
+• "the cheapest" / "most expensive" → match by price
+
+When the user uses a positional or descriptive reference:
+1. Find the matching product from the VISIBLE list above
+2. Return: { "action": "NAVIGATE_DETAIL", "productId": "<exact ID from visible list>" }
+3. Speak conversationally: "Opening that one for you!" or equivalent
+
+NEVER say "I can't see the screen". You CAN see it via this data.` : 'No products are currently visible on the user\'s screen.'}
 ${catalogContext}
 `;
 
@@ -531,18 +607,18 @@ ${catalogContext}
 // ══════════════════════════════════════════════════════════════════════════════
 
 const PRODUCT_KEYWORDS = {
-  laptop: ['laptop', 'laptops', 'labdop', 'labtop', 'notebook', 'லேப்டாப்', 'लैपटॉप'],
-  phone: ['phone', 'phones', 'smartphone', 'mobile', 'fone', 'ஃபோன்', 'फोन', 'மொபைல்'],
-  shoes: ['shoes', 'shoe', 'shoss', 'footwear', 'sneakers', 'boots', 'ஷூ', 'காலணி', 'जूते'],
-  watch: ['watch', 'watches', 'wach', 'timepiece', 'வாட்ச்', 'घड़ी'],
-  perfume: ['perfume', 'perfumes', 'fragrance', 'cologne', 'சென்ட்', 'பர்ஃபியூம்', 'इत्र'],
-  shirt: ['shirt', 'shirts', 'tshirt', 't-shirt', 'top', 'tops', 'சட்டை', 'शर्ट'],
-  bag: ['bag', 'bags', 'handbag', 'backpack', 'பை', 'बैग'],
-  cosmetics: ['cosmetics', 'makeup', 'skincare', 'beauty', 'மேக்கப்', 'मेकअप'],
-  headphones: ['headphones', 'earphones', 'earbuds', 'headphone', 'ஹெட்ஃபோன்', 'हेडफोन'],
-  tablet: ['tablet', 'tablets', 'ipad', 'டேப்லெட்', 'टैबलेट'],
-  accessories: ['accessories', 'accessory', 'jewelry', 'belt', 'wallet', 'அக்சசரீஸ்'],
-  electronics: ['electronics', 'gadgets', 'tech', 'எலக்ட்ரானிக்ஸ்', 'इलेक्ट्रॉनिक्स']
+  laptop: ['laptop', 'laptops', 'labdop', 'labtop', 'laptob', 'notebook', 'lap top', 'லேப்டாப்', 'லேப்', 'லேப்டா', 'लैपटॉप', 'laptoop'],
+  phone: ['phone', 'phones', 'smartphone', 'mobile', 'fone', 'phoen', 'pjone', 'ஃபோன்', 'மொபைல்', 'மொப', 'மொபை', 'மொபைல', 'फोन', 'मोबाइल', 'fon'],
+  shoes: ['shoes', 'shoe', 'shoss', 'shoez', 'shoews', 'footwear', 'sneakers', 'boots', 'ஷூ', 'ஷூஸ்', 'காலணி', 'जूते', 'joote'],
+  watch: ['watch', 'watches', 'wach', 'wtch', 'wotch', 'timepiece', 'வாட்ச்', 'வாச்', 'வாட்ச', 'घड़ी', 'ghadi'],
+  perfume: ['perfume', 'perfumes', 'perfum', 'parfume', 'perfyum', 'fragrance', 'cologne', 'சென்ட்', 'செண்ட்', 'பர்ஃபியூம்', 'பெர்ஃபூ', 'इत्र'],
+  shirt: ['shirt', 'shirts', 'tshirt', 't-shirt', 'tshrt', 'shrt', 'shrit', 'top', 'tops', 'சட்டை', 'சட்', 'சட்ட', 'மென்சட்', 'शर्ट'],
+  bag: ['bag', 'bags', 'handbag', 'backpack', 'beg', 'baag', 'பை', 'பேக்', 'பேக்கு', 'बैग'],
+  cosmetics: ['cosmetics', 'makeup', 'skincare', 'beauty', 'cosmatic', 'kosmetics', 'மேக்கப்', 'मेकअप'],
+  headphones: ['headphones', 'earphones', 'earbuds', 'headphone', 'headfone', 'hedphone', 'earfone', 'ஹெட்ஃபோன்', 'हेडफोन'],
+  tablet: ['tablet', 'tablets', 'ipad', 'tab', 'டேப்லெட்', 'टैबलेट'],
+  accessories: ['accessories', 'accessory', 'accesoris', 'aksesories', 'jewelry', 'belt', 'wallet', 'அக்சசரீஸ்'],
+  electronics: ['electronics', 'gadgets', 'tech', 'elctronics', 'elektroniks', 'எலக்ட்ரானிக்ஸ்', 'इलेक्ट्रॉनिक्स']
 };
 
 const NAV_KEYWORDS = {

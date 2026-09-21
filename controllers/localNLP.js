@@ -1,6 +1,47 @@
 const Product = require('../models/Product');
 const Order = require('../models/Order');
 
+function levenshteinDistance(a, b) {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+const PHONETIC_CORRECTIONS = {
+  'labdop': 'laptop', 'labtop': 'laptop', 'laptob': 'laptop',
+  'shoss': 'shoes', 'shoez': 'shoes', 'shoews': 'shoes',
+  'fone': 'phone', 'phoen': 'phone', 'pjone': 'phone',
+  'wach': 'watch', 'wtch': 'watch', 'wotch': 'watch',
+  'tshrt': 'shirt', 'shrt': 'shirt', 'shrit': 'shirt',
+  'perfum': 'perfume', 'parfume': 'perfume', 'perfyum': 'perfume',
+  'headfone': 'headphones', 'hedphone': 'headphones', 'earfone': 'headphones',
+  'elctronics': 'electronics', 'elektroniks': 'electronics',
+  'accesoris': 'accessories', 'aksesories': 'accessories',
+  'cosmatic': 'cosmetics', 'kosmetics': 'cosmetics'
+};
+
+const VALID_KEYWORDS = [
+  'laptop', 'phone', 'shoes', 'watch', 'shirt', 
+  'perfume', 'headphones', 'electronics', 'accessories', 'cosmetics',
+  'cart', 'order', 'checkout', 'return'
+];
+
 // 1. Detect language
 function detectLanguage(message) {
   const text = message.toLowerCase();
@@ -133,8 +174,20 @@ const responses = {
 
 exports.processLocally = async (message, user, recentOrders, conversationHistory = []) => {
   try {
-    const text = message.toLowerCase();
-    const lang = detectLanguage(message);
+    let text = message.toLowerCase();
+    
+    // Fuzzy correction
+    text = text.split(/\s+/).map(word => {
+      if (PHONETIC_CORRECTIONS[word]) return PHONETIC_CORRECTIONS[word];
+      for (const kw of VALID_KEYWORDS) {
+        if (levenshteinDistance(word, kw) <= 2 && word.length > 3) {
+          return kw;
+        }
+      }
+      return word;
+    }).join(' ');
+
+    const lang = detectLanguage(text);
     const intent = classifyIntent(text);
     
     const langResponses = responses[lang] || responses['english'];
