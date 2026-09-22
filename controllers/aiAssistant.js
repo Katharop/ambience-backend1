@@ -724,7 +724,35 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = []) 
     return { text: "Scrolling " + dir, actions: [{ action: "SCROLL", direction: dir }], emotion: "happy", language: "en" };
   }
 
-  // 3. Check for specific product names or semantic categories in DB
+  // 3. Standard Navigation Intents (deals, mens, womens, cart)
+  let matchedPath = null;
+  for (const [path, keywords] of Object.entries(NAV_KEYWORDS)) {
+    for (const kw of keywords) {
+      if (lower.includes(kw)) {
+        matchedPath = path;
+        break;
+      }
+    }
+    if (matchedPath) break;
+  }
+
+  if (matchedPath) {
+    const pageName = matchedPath.replace(/\//g, ' ').trim() || 'page';
+    const texts = {
+      english: `Taking you to ${pageName}!`,
+      tamil: `${pageName} பக்கத்துக்கு போகிறோம்!`,
+      hindi: `${pageName} पेज पर ले जा रहा हूँ!`,
+      malayalam: `${pageName} പേജിലേക്ക് പോകുന്നു!`
+    };
+    return {
+      text: texts[lang] || texts.english,
+      actions: [{ action: 'NAVIGATE_ROUTE', path: matchedPath }],
+      emotion: 'happy',
+      language: lang === 'tamil' ? 'ta' : lang === 'hindi' ? 'hi' : lang === 'malayalam' ? 'ml' : 'en'
+    };
+  }
+
+  // 4. Check for specific product names or semantic categories in DB
   try {
     const products = await Product.find({ status: 'live' }).lean();
     let exactProduct = null;
@@ -790,34 +818,6 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = []) 
     }
   } catch (err) {
     console.warn('[Smart Fallback] DB search failed:', err.message);
-  }
-
-  // 4. Check for standard navigation intent (deals, profile, cart)
-  let matchedPath = null;
-  for (const [path, keywords] of Object.entries(NAV_KEYWORDS)) {
-    for (const kw of keywords) {
-      if (lower.includes(kw)) {
-        matchedPath = path;
-        break;
-      }
-    }
-    if (matchedPath) break;
-  }
-
-  if (matchedPath) {
-    const pageName = matchedPath.replace(/\//g, ' ').trim() || 'page';
-    const texts = {
-      english: `Taking you to ${pageName}!`,
-      tamil: `${pageName} பக்கத்துக்கு போகிறோம்!`,
-      hindi: `${pageName} पेज पर ले जा रहा हूँ!`,
-      malayalam: `${pageName} പേജിലേക്ക് പോകുന്നു!`
-    };
-    return {
-      text: texts[lang] || texts.english,
-      actions: [{ action: 'NAVIGATE_ROUTE', path: matchedPath }],
-      emotion: 'happy',
-      language: lang === 'tamil' ? 'ta' : lang === 'hindi' ? 'hi' : lang === 'malayalam' ? 'ml' : 'en'
-    };
   }
 
   // 5. Genuine unknown — still friendly
