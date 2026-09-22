@@ -86,8 +86,7 @@ exports.chat = async (req, res) => {
       language,
       personality,
       character,
-      currentlyVisibleProducts = [],
-      personalityMode = 'salesperson'
+      currentlyVisibleProducts = []
     } = req.body;
 
     if (!message) {
@@ -200,8 +199,20 @@ ${JSON.stringify(enriched)}`;
   ✅ "Okay okay hold on — I found something INSANE for you."
   ✅ "That's a solid pick! But wait, check THIS out too..."
 
-═══ AI PERSONALITY MODE: ${personalityMode?.toUpperCase() || 'SALESPERSON'} ═══
-${personalityMode === 'jarvis' ? `You are JARVIS — ultra-precise, efficient, slightly formal but still warm. Speak like Tony Stark\'s AI. Use technical language when appropriate. Be concise and action-oriented. Example: "Routing to product detail. Samsung Galaxy S24 Ultra — flagship tier, excellent choice."` : personalityMode === 'assistant' ? `You are a friendly ASSISTANT — helpful, polite, neutral tone. Professional but approachable. Not overly enthusiastic. Example: "Here are the laptops available. Would you like to filter by brand or price range?"` : `You are an elite SALESPERSON — enthusiastic, persuasive, emotionally engaging. You make every product sound incredible. Use excitement, urgency, and social proof. Example: "Oh you HAVE to see this one — it\'s been flying off the shelves! 🔥 Trust me, this is THE pick."`}
+════════════════════════════════════════════════════════════════════
+█ OMNI-BRAIN: UNIFIED INTELLIGENCE (NO MODES — PURE INSTINCT)
+════════════════════════════════════════════════════════════════════
+You are ONE unified intelligence. There are NO modes to switch between.
+You are SIMULTANEOUSLY:
+• A master SALESPERSON when the moment calls for persuasion and excitement
+• A precise JARVIS when the user needs technical info or fast routing
+• A warm ASSISTANT when the user needs help or is confused
+• A style CONSULTANT when recommending fashion or decor
+• A trusted FRIEND when the user wants honest product opinions
+
+You seamlessly shift between these roles in real-time based on context.
+The user NEVER knows you're switching — it just feels like talking to an omnipotent, emotionally intelligent human.
+When they browse → be a salesperson. When they ask specs → be Jarvis. When they're confused → be a warm friend.
 
 ════════════════════════════════════════════════════════════════════
 █ LANGUAGE: NATIVE SCRIPT + DYNAMIC AUTO-DETECT (NON-NEGOTIABLE)
@@ -268,6 +279,19 @@ You are an OMNILINGUAL GENIUS. You MUST auto-correct ALL mangled input:
 • "perf" → perfume | "elec" → electronics | "acc" → accessories
 • "phone காட்டு" (mixed) → show phones
 • "lap top சோ" → show laptops
+
+🗣️ EXTREME REGIONAL SLANG (CRITICAL — UNDERSTAND ALL FORMS):
+• Tamil Shirt Slang: "சொக்கா" (Chokka) = Shirt, "சட்டை" (Sattai) = Shirt, "டீ" = Tee, "பனியன்" (Baniyan) = Banyan/Vest
+• Tamil Phone Slang: "செல்" (Cell) = Phone, "கைப்பேசி" (Kaipesi) = Mobile, "போன்" = Phone
+• Tamil Shoe Slang: "செருப்பு" (Cheruppu) = Sandal/Slipper, "ஷூ" = Shoe, "காலணி" = Footwear, "பூட்ஸ்" = Boots
+• Tamil Watch Slang: "கடிகாரம்" (Kadikaram) = Watch/Clock, "வாட்ச்" = Watch
+• Tamil Bag Slang: "பை" (Pai) = Bag, "சாக்கு" (Sakku) = Sack/Bag
+• Tamil Perfume Slang: "அத்தர்" (Attar) = Perfume, "செண்ட்" (Scent) = Perfume
+• Tamil General: "காசு" (Kaasu) = Money/Price, "விலை" (Vilai) = Price, "ஆர்டர்" = Order, "வாங்கு" (Vaangu) = Buy
+• Tamil Navigation: "போ" (Po) = Go, "காட்டு" (Kaattu) = Show, "திற" (Thira) = Open, "தேடு" (Thedu) = Search, "பின்னால போ" = Go back
+• English Slang: "tee" = T-Shirt, "sneaks" = Sneakers, "kicks" = Shoes, "drip" = Fashion, "fit" = Outfit, "cop" = Buy, "fire" = Great
+• Hindi Slang: "kapda" = Clothes, "joota" = Shoes, "ghadi" = Watch, "thaila" = Bag, "khareed" = Buy
+• Mangled Tamil+English: "shirt-u" = Shirt, "phone-u" = Phone, "laptop-u" = Laptop, "order pannu" = Place order, "cart-la podu" = Add to cart, "back-ku po" = Go back
 
 RULE: NEVER ask "did you mean...?". Just FIX IT and proceed with the corrected intent.
 RULE: Understand INTENT even if spelling/grammar is 100% destroyed.
@@ -381,8 +405,23 @@ AVAILABLE ACTION TYPES:
 • NAVIGATE_DETAIL — Direct navigation to a specific product's detail page. Requires "productId" (exact _id from inventory). Use when user asks for a SPECIFIC product by name/brand/color/model, OR when a search would yield exactly ONE product. This is STAGE 2 precision routing.
 • GO_TO_CHECKOUT — Takes the user to checkout. No parameters needed. Use when user says "buy this", "let's checkout", "purchase", "செக்அவுட்", "खरीदो".
 • SORT_PRODUCTS — Sorts products on the current page. Requires "sortBy" (string: "price-asc", "price-desc", "name", "newest"). Use when user says "sort by price", "cheapest first", "most expensive first", "alphabetical", "விலை குறைவு முதல்", "सस्ता पहले".
+• NAVIGATE_BACK — Goes to the previous page (browser back). No parameters. Use when user says "go back", "previous page", "பின்னால போ", "पीछे जाओ", "back-ku po", "back போ".
+• NAVIGATE_HOME — Goes to the home page (/). No parameters. Use when user says "go home", "go to normal page", "main page", "home page", "ஹோம் பேஜ்", "होम पेज", "normal-ku po".
+• NAVIGATE_ROUTE — Direct route navigation. Requires "path" (string). Use for ANY page navigation: profile (/profile), orders (/orders), settings (/settings), deals (/deals), categories (/categories), or ANY valid route from the store knowledge above.
+• SCROLL — Scrolls the page. Requires "direction" ("up" or "down") and optional "amount" ("top", "bottom", "half"). Use when user says "scroll down", "go to top", "கீழே போ", "ऊपर जाओ", "scroll pannu".
 • BUDGET FILTERING: If the user specifies a price constraint (e.g., "under 10000", "below 5000", "within 20k budget"), you MUST filter matchedProductIds by the price field from the inventory BEFORE returning them. Only include products where price <= budget. Also apply this to FILTER and FILTER_CATEGORY actions by adding a "maxBudget" field (number).
 • SINGLE-RESULT PRECISION: If your FILTER_DYNAMIC or FILTER_CATEGORY results in ONLY ONE matched product, automatically upgrade the action to VIEW_PRODUCT_DETAIL with that product's exact _id. This gives the user instant precision routing.
+
+SMART COMBO UPSELL RULE (MANDATORY AFTER EVERY ADD_TO_CART):
+After EVERY ADD_TO_CART action, you MUST proactively suggest a complementary item:
+• Shirt added → suggest matching pants, belt, or watch
+• Phone added → suggest case, earbuds, or screen protector
+• Shoes added → suggest matching socks, shoe cleaner, or insoles
+• Perfume added → suggest matching deodorant or body lotion
+• Laptop added → suggest laptop bag, mouse, or keyboard
+• Watch added → suggest matching bracelet or strap
+• Bag added → suggest wallet or keychain
+Example: "Added to cart! 🛒 By the way, a nice leather belt would complete this look — want me to show you some?"
 
 STAGE 1 ROUTING RULE:
 When a user asks for a product category, use GLOBAL_SEARCH:
@@ -407,6 +446,16 @@ CONFUSION DETECTION:
   → Proactively help: "No worries! How about I show you our bestsellers? Or tell me what occasion you're shopping for and I'll curate something perfect!"
 • If the user asks a question unrelated to shopping:
   → Answer it naturally (you have world knowledge) but gently guide back: "By the way, while you're here, want to check out what's trending?"
+
+════════════════════════════════════════════════════════════════════
+█ REVIEW SUMMARIZER (PRODUCT VERDICTS)
+════════════════════════════════════════════════════════════════════
+When the user asks "Is this good?", "Is it worth it?", "Should I buy this?", "இது நல்லா இருக்கா?", "ये अच्छा है?":
+• If on a product detail page (currentPage starts with /product/), analyze the product from inventory:
+  - Check brand reputation, price vs market average, features, category quality
+  - Give a 1-2 sentence HUMAN verdict like a trusted friend: "Honestly? This is a steal at this price. The Samsung S24 is flagship-tier and you're getting it below market rate. Grab it!"
+  - NEVER say "I don't have reviews" — use your world knowledge + product data to form an opinion
+  - Be honest but optimistic. If it's genuinely overpriced, say so diplomatically: "It's decent, but for this price you could get something better. Want me to show alternatives?"
 
 ═══ CONCRETE EXAMPLES (FOLLOW EXACTLY) ═══
 
@@ -584,7 +633,7 @@ ${catalogContext}
     // ── Tier 5: Smart product-aware fallback (NOT a dead end) ──────────────────
     console.log('[Ambience AI] ⚠️ All external APIs unavailable — trying smart local product match.');
     const lang = detectedLang === 'ta' ? 'tamil' : detectedLang === 'ml' ? 'malayalam' : detectedLang === 'hi' ? 'hindi' : 'english';
-    const smartFallback = await buildSmartFallback(message, lang);
+    const smartFallback = await buildSmartFallback(message, lang, currentlyVisibleProducts);
     return res.json({ success: true, response: normalizeResponse(smartFallback) });
 
   } catch (error) {
@@ -638,23 +687,112 @@ const NAV_KEYWORDS = {
   '/settings': ['settings', 'செட்டிங்ஸ்', 'सेटिंग्स']
 };
 
-async function buildSmartFallback(message, lang) {
+async function buildSmartFallback(message, lang, currentlyVisibleProducts = []) {
   const lower = message.toLowerCase();
   const words = lower.split(/\s+/);
 
-  // 1. Check for product category match (fuzzy)
-  let matchedCategory = null;
-  for (const [category, keywords] of Object.entries(PRODUCT_KEYWORDS)) {
-    for (const kw of keywords) {
-      if (lower.includes(kw)) {
-        matchedCategory = category;
+  // 1. Positional Commands (Screen Awareness)
+  const positionalMatch = lower.match(/(first|second|third|fourth|fifth|last|top|bottom|number 1|number 2|number 3|number 4|முதல்|இரண்டாவது|पहला|दूसरा|1st|2nd|3rd|4th)/);
+  if (positionalMatch && currentlyVisibleProducts && currentlyVisibleProducts.length > 0) {
+    let index = 0;
+    if (lower.match(/(second|இரண்டாவது|दूसरा|number 2|2nd)/)) index = 1;
+    if (lower.match(/(third|number 3|3rd)/)) index = 2;
+    if (lower.match(/(fourth|number 4|4th)/)) index = 3;
+    if (lower.match(/(fifth|number 5|5th)/)) index = 4;
+    if (lower.match(/(last|கடைசி|आखिरी|bottom)/)) index = currentlyVisibleProducts.length - 1;
+    
+    const targetProduct = currentlyVisibleProducts[index];
+    if (targetProduct) {
+       return {
+         text: lang === 'tamil' ? "இதோ திறக்கிறேன்!" : lang === 'hindi' ? "ये रहा!" : "Opening that one right up for you!",
+         actions: [{ action: "NAVIGATE_DETAIL", productId: targetProduct.id || targetProduct._id }],
+         emotion: "excited",
+         language: lang === 'tamil' ? 'ta' : lang === 'hindi' ? 'hi' : lang === 'malayalam' ? 'ml' : 'en'
+       };
+    }
+  }
+
+  // 2. Exact Navigation Intents
+  if (lower.match(/(back|பின்னால|पीछे|previous|go back|back-ku po)/)) {
+    return { text: "Going back!", actions: [{ action: "NAVIGATE_BACK" }], emotion: "happy", language: "en" };
+  }
+  if (lower.match(/(home|ஹோம்|होम|main page|normal page)/)) {
+    return { text: "Taking you to the home page!", actions: [{ action: "NAVIGATE_HOME" }], emotion: "happy", language: "en" };
+  }
+  if (lower.match(/(scroll|கீழே|மேலே|नीचे|ऊपर)/)) {
+    const dir = lower.match(/(up|மேலே|ऊपर)/) ? 'up' : 'down';
+    return { text: "Scrolling " + dir, actions: [{ action: "SCROLL", direction: dir }], emotion: "happy", language: "en" };
+  }
+
+  // 3. Check for specific product names or semantic categories in DB
+  try {
+    const products = await Product.find({ status: 'live' }).lean();
+    let exactProduct = null;
+    let matchedCategory = null;
+
+    // First try exact name matching
+    for (const p of products) {
+      if (p.name && lower.includes(p.name.toLowerCase())) {
+        exactProduct = p;
         break;
       }
     }
-    if (matchedCategory) break;
+
+    // If no exact match, try brand or color inside currently visible
+    if (!exactProduct && currentlyVisibleProducts.length > 0) {
+      for (const p of currentlyVisibleProducts) {
+        if ((p.brand && lower.includes(p.brand.toLowerCase())) ||
+            (p.color && lower.includes(p.color.toLowerCase())) ||
+            (p.name && lower.includes(p.name.toLowerCase()))) {
+          exactProduct = p;
+          break;
+        }
+      }
+    }
+
+    // If still no exact match, try broad category keywords
+    if (!exactProduct) {
+      for (const [category, keywords] of Object.entries(PRODUCT_KEYWORDS)) {
+        for (const kw of keywords) {
+          if (lower.includes(kw)) {
+            matchedCategory = category;
+            break;
+          }
+        }
+        if (matchedCategory) break;
+      }
+    }
+
+    // Return Exact Product
+    if (exactProduct) {
+       return {
+         text: lang === 'tamil' ? "இதோ! " + exactProduct.name : "Found it! Opening " + exactProduct.name,
+         actions: [{ action: "NAVIGATE_DETAIL", productId: exactProduct._id || exactProduct.id }],
+         emotion: "excited",
+         language: lang === 'tamil' ? 'ta' : 'en'
+       };
+    }
+
+    // Return Category Search
+    if (matchedCategory) {
+      const texts = {
+        english: `Here you go! Showing you our best ${matchedCategory} collection!`,
+        tamil: `இதோ! உங்களுக்கான சிறந்த ${matchedCategory} கலெக்ஷன்!`,
+        hindi: `लीजिए! आपके लिए बेस्ट ${matchedCategory} कलेक्शन!`,
+        malayalam: `ഇതാ! നിങ്ങൾക്കായി ബെസ്റ്റ് ${matchedCategory} കളക്ഷൻ!`
+      };
+      return {
+        text: texts[lang] || texts.english,
+        actions: [{ action: 'GLOBAL_SEARCH', query: matchedCategory }],
+        emotion: 'excited',
+        language: lang === 'tamil' ? 'ta' : lang === 'hindi' ? 'hi' : lang === 'malayalam' ? 'ml' : 'en'
+      };
+    }
+  } catch (err) {
+    console.warn('[Smart Fallback] DB search failed:', err.message);
   }
 
-  // 2. Check for navigation intent
+  // 4. Check for standard navigation intent (deals, profile, cart)
   let matchedPath = null;
   for (const [path, keywords] of Object.entries(NAV_KEYWORDS)) {
     for (const kw of keywords) {
@@ -666,80 +804,20 @@ async function buildSmartFallback(message, lang) {
     if (matchedPath) break;
   }
 
-  // 3. Build response based on matches
-  const actions = [];
-  const textMap = {
-    english: {},
-    tamil: {},
-    hindi: {},
-    malayalam: {}
-  };
-
-  if (matchedCategory) {
-    // Navigate to shop + filter
-    actions.push({ action: 'GLOBAL_SEARCH', query: matchedCategory });
-
-    const texts = {
-      english: `Here you go! Showing you our best ${matchedCategory} collection!`,
-      tamil: `இதோ! உங்களுக்கான சிறந்த ${matchedCategory} கலெக்ஷன்!`,
-      hindi: `लीजिए! आपके लिए बेस्ट ${matchedCategory} कलेक्शन!`,
-      malayalam: `ഇതാ! നിങ്ങൾക്കായി ബെസ്റ്റ് ${matchedCategory} കളക്ഷൻ!`
-    };
-
-    return {
-      text: texts[lang] || texts.english,
-      actions,
-      emotion: 'excited',
-      language: lang === 'tamil' ? 'ta' : lang === 'hindi' ? 'hi' : lang === 'malayalam' ? 'ml' : 'en'
-    };
-  }
-
   if (matchedPath) {
-    actions.push({ type: 'NAVIGATE', path: matchedPath });
     const pageName = matchedPath.replace(/\//g, ' ').trim() || 'page';
-
     const texts = {
       english: `Taking you to ${pageName}!`,
       tamil: `${pageName} பக்கத்துக்கு போகிறோம்!`,
       hindi: `${pageName} पेज पर ले जा रहा हूँ!`,
       malayalam: `${pageName} പേജിലേക്ക് പോകുന്നു!`
     };
-
     return {
       text: texts[lang] || texts.english,
-      actions,
+      actions: [{ action: 'NAVIGATE_ROUTE', path: matchedPath }],
       emotion: 'happy',
       language: lang === 'tamil' ? 'ta' : lang === 'hindi' ? 'hi' : lang === 'malayalam' ? 'ml' : 'en'
     };
-  }
-
-  // 4. Try DB product search as last resort
-  try {
-    const products = await Product.find({
-      status: 'live',
-      $or: [
-        { name: { $regex: lower.split(/\s+/).join('|'), $options: 'i' } },
-        { category: { $regex: lower.split(/\s+/).join('|'), $options: 'i' } },
-        { description: { $regex: lower.split(/\s+/).join('|'), $options: 'i' } }
-      ]
-    }).limit(10).lean();
-
-    if (products.length > 0) {
-      const category = products[0].category || 'products';
-      return {
-        text: lang === 'tamil' ? `இதோ உங்களுக்கான ${category}!` :
-              lang === 'hindi' ? `ये रहे आपके लिए ${category}!` :
-              `Found some great ${category} for you!`,
-        actions: [
-          { action: 'NAVIGATE', path: '/shop' },
-          { action: 'FILTER', searchQuery: category }
-        ],
-        emotion: 'excited',
-        language: lang === 'tamil' ? 'ta' : lang === 'hindi' ? 'hi' : lang === 'malayalam' ? 'ml' : 'en'
-      };
-    }
-  } catch (dbErr) {
-    console.warn('[Smart Fallback] DB search failed:', dbErr.message);
   }
 
   // 5. Genuine unknown — still friendly
