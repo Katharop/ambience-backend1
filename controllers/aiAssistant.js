@@ -394,6 +394,7 @@ When the user asks for products or navigation, you SIMULTANEOUSLY:
   b) ACT: Execute the right UI action using the actions array
 
 AVAILABLE ACTION TYPES:
+• SLEEP — Dismiss UI and return to passive mode. Triggered by: "close", "stop", "bye", "போயிடு", "நிறுத்து", "बंद करो", "stop listening", "go to sleep", "shut up"
 • NAVIGATE — opens a page. Requires "path" (string). Use EXACT routes listed above.
 • FILTER — filters products on the shop page. Requires "searchQuery" (string, ALWAYS in English). Frontend semantic engine will match and isolate.
 • SHOW_PRODUCTS — sends full product objects to render. Requires "products" (array).
@@ -458,6 +459,9 @@ When the user asks "Is this good?", "Is it worth it?", "Should I buy this?", "�
   - Be honest but optimistic. If it's genuinely overpriced, say so diplomatically: "It's decent, but for this price you could get something better. Want me to show alternatives?"
 
 ═══ CONCRETE EXAMPLES (FOLLOW EXACTLY) ═══
+
+User: "போயிடு" / "close" / "stop listening" / "bye"
+Response: {"text": "Going to sleep! Say my name when you need me!", "actions": [{"action": "SLEEP"}], "emotion": "happy", "language": "en"}
 
 User: "Show me laptops"
 Response: {"text": "Ooh, let me pull up our best laptops for you! Any preferred brand or budget?", "actions": [{"action": "GLOBAL_SEARCH", "query": "laptop"}], "emotion": "excited", "language": "en"}
@@ -656,35 +660,36 @@ ${catalogContext}
 // ══════════════════════════════════════════════════════════════════════════════
 
 const PRODUCT_KEYWORDS = {
-  laptop: ['laptop', 'laptops', 'labdop', 'labtop', 'laptob', 'notebook', 'lap top', 'லேப்டாப்', 'லேப்', 'லேப்டா', 'लैपटॉप', 'laptoop'],
-  phone: ['phone', 'phones', 'smartphone', 'mobile', 'fone', 'phoen', 'pjone', 'ஃபோன்', 'மொபைல்', 'மொப', 'மொபை', 'மொபைல', 'फोन', 'मोबाइल', 'fon'],
-  shoes: ['shoes', 'shoe', 'shoss', 'shoez', 'shoews', 'footwear', 'sneakers', 'boots', 'ஷூ', 'ஷூஸ்', 'காலணி', 'जूते', 'joote'],
-  watch: ['watch', 'watches', 'wach', 'wtch', 'wotch', 'timepiece', 'வாட்ச்', 'வாச்', 'வாட்ச', 'घड़ी', 'ghadi'],
-  perfume: ['perfume', 'perfumes', 'perfum', 'parfume', 'perfyum', 'fragrance', 'cologne', 'சென்ட்', 'செண்ட்', 'பர்ஃபியூம்', 'பெர்ஃபூ', 'इत्र'],
-  shirt: ['shirt', 'shirts', 'tshirt', 't-shirt', 'tshrt', 'shrt', 'shrit', 'top', 'tops', 'சட்டை', 'சட்', 'சட்ட', 'மென்சட்', 'शर्ट'],
-  bag: ['bag', 'bags', 'handbag', 'backpack', 'beg', 'baag', 'பை', 'பேக்', 'பேக்கு', 'बैग'],
-  cosmetics: ['cosmetics', 'makeup', 'skincare', 'beauty', 'cosmatic', 'kosmetics', 'மேக்கப்', 'मेकअप'],
-  headphones: ['headphones', 'earphones', 'earbuds', 'headphone', 'headfone', 'hedphone', 'earfone', 'ஹெட்ஃபோன்', 'हेडफोन'],
-  tablet: ['tablet', 'tablets', 'ipad', 'tab', 'டேப்லெட்', 'टैबलेट'],
-  accessories: ['accessories', 'accessory', 'accesoris', 'aksesories', 'jewelry', 'belt', 'wallet', 'அக்சசரீஸ்'],
-  electronics: ['electronics', 'gadgets', 'tech', 'elctronics', 'elektroniks', 'எலக்ட்ரானிக்ஸ்', 'इलेक्ट्रॉनिक्स']
+  laptop: ['laptop', 'laptops', 'labdop', 'labtop', 'laptob', 'notebook', 'lap top', 'லேப்டாப்', 'லேப்', 'லேப்டா', 'लैपटॉप', 'laptoop', 'computer', 'pc'],
+  phone: ['phone', 'phones', 'smartphone', 'mobile', 'fone', 'phoen', 'pjone', 'ஃபோன்', 'மொபைல்', 'மொப', 'மொபை', 'மொபைல', 'फोन', 'मोबाइल', 'fon', 'செல்', 'கைபேசி', 'cell', 'cellphone', 'handset', 'iphone', 'android'],
+  shoes: ['shoes', 'shoe', 'shoss', 'shoez', 'shoews', 'footwear', 'sneakers', 'boots', 'ஷூ', 'ஷூஸ்', 'காலணி', 'செருப்பு', 'जूते', 'joote', 'joota', 'sneaks', 'kicks', 'trainers', 'sandals', 'slippers'],
+  watch: ['watch', 'watches', 'wach', 'wtch', 'wotch', 'timepiece', 'வாட்ச்', 'வாச்', 'வாட்ச', 'கடிகாரம்', 'घड़ी', 'ghadi', 'smartwatch', 'wristwatch'],
+  perfume: ['perfume', 'perfumes', 'perfum', 'parfume', 'perfyum', 'fragrance', 'cologne', 'சென்ட்', 'செண்ட்', 'பர்ஃபியூம்', 'பெர்ஃபூ', 'வாசனை', 'इत्र', 'attar', 'scent', 'body spray', 'deodorant'],
+  shirt: ['shirt', 'shirts', 'tshirt', 't-shirt', 'tshrt', 'shrt', 'shrit', 'top', 'tops', 'சட்டை', 'சட்', 'சட்ட', 'மென்சட்', 'சொக்கா', 'சட்டு', 'शर्ट', 'tee', 'polo', 'kurta', 'kurti', 'formal shirt'],
+  bag: ['bag', 'bags', 'handbag', 'backpack', 'beg', 'baag', 'பை', 'பேக்', 'பேக்கு', 'சாக்கு', 'बैग', 'thaila', 'purse', 'tote', 'clutch', 'sling bag', 'duffle'],
+  cosmetics: ['cosmetics', 'makeup', 'skincare', 'beauty', 'cosmatic', 'kosmetics', 'மேக்கப்', 'मेकअप', 'lipstick', 'foundation', 'moisturizer', 'serum'],
+  headphones: ['headphones', 'earphones', 'earbuds', 'headphone', 'headfone', 'hedphone', 'earfone', 'ஹெட்ஃபோன்', 'हेडफोन', 'airpods', 'wireless earbuds', 'bluetooth speaker'],
+  tablet: ['tablet', 'tablets', 'ipad', 'tab', 'டேப்லெட்', 'टैबलेट', 'kindle'],
+  accessories: ['accessories', 'accessory', 'accesoris', 'aksesories', 'jewelry', 'belt', 'wallet', 'அக்சசரீஸ்', 'jewellery', 'necklace', 'bracelet', 'ring', 'chain', 'sunglasses'],
+  electronics: ['electronics', 'gadgets', 'tech', 'elctronics', 'elektroniks', 'எலக்ட்ரானிக்ஸ்', 'इलेक्ट्रॉनिक्स', 'electrical', 'devices'],
+  clothing: ['clothing', 'clothes', 'dress', 'dresses', 'outfit', 'outfits', 'apparel', 'garment', 'ஆடை', 'உடை', 'துணி', 'कपड़े', 'kapda', 'kapde', 'vastra', 'drip', 'fit', 'fashion', 'wear']
 };
 
 const NAV_KEYWORDS = {
-  '/shop': ['shop', 'store', 'browse', 'கடை', 'दुकान', 'ஷாப்'],
-  '/cart': ['cart', 'basket', 'கார்ட்', 'कार्ट'],
-  '/deals': ['deals', 'deal', 'offers', 'sale', 'ஆஃபர்', 'ऑफर'],
-  '/orders': ['orders', 'order', 'my order', 'ஆர்டர்', 'ऑर्डर'],
-  '/shop/mens': ['mens', "men's", 'men', 'ஆண்கள்', 'पुरुष'],
-  '/shop/womens': ['womens', "women's", 'women', 'பெண்கள்', 'महिला'],
-  '/shop/electronics': ['electronics', 'electronic', 'gadgets', 'எலக்ட்ரானிக்ஸ்'],
-  '/shop/footwear': ['footwear', 'shoes', 'ஷூ', 'जूते'],
-  '/shop/timepieces': ['timepieces', 'watches', 'வாட்ச்', 'घड़ी'],
-  '/shop/fragrances': ['fragrances', 'perfumes', 'சென்ட்', 'इत्र'],
-  '/shop/cosmetics': ['cosmetics', 'makeup', 'மேக்கப்', 'मेकअप'],
-  '/shop/accessories': ['accessories', 'அக்சசரீஸ்'],
-  '/profile': ['profile', 'account', 'புரொஃபைல்', 'प्रोफाइल'],
-  '/settings': ['settings', 'செட்டிங்ஸ்', 'सेटिंग्स']
+  '/shop': ['shop', 'store', 'browse', 'கடை', 'दुकान', 'ஷாப்', 'all products', 'everything', 'collection'],
+  '/cart': ['cart', 'basket', 'கார்ட்', 'कार्ट', 'my cart', 'shopping cart'],
+  '/deals': ['deals', 'deal', 'offers', 'sale', 'ஆஃபர்', 'ऑफर', 'discount', 'clearance'],
+  '/orders': ['orders', 'order', 'my order', 'ஆர்டர்', 'ऑर्डर', 'my orders', 'order history', 'tracking'],
+  '/shop/mens': ['mens', "men's", 'men', 'ஆண்கள்', 'पुरुष', "men's clothes", 'mens clothes', 'male', 'boys', 'gents', 'ஆண்', 'men clothing', 'mens clothing', 'mens wear'],
+  '/shop/womens': ['womens', "women's", 'women', 'பெண்கள்', 'महिला', "women's clothes", 'womens clothes', 'female', 'girls', 'ladies', 'பெண்', 'women clothing', 'womens clothing', 'womens wear', 'ladies wear'],
+  '/shop/electronics': ['electronics', 'electronic', 'gadgets', 'எலக்ட்ரானிக்ஸ்', 'tech', 'devices'],
+  '/shop/footwear': ['footwear', 'shoes', 'ஷூ', 'जूते', 'sneakers', 'boots', 'sandals', 'செருப்பு'],
+  '/shop/timepieces': ['timepieces', 'watches', 'வாட்ச்', 'घड़ी', 'smartwatch', 'கடிகாரம்'],
+  '/shop/fragrances': ['fragrances', 'perfumes', 'சென்ட்', 'इत्र', 'cologne', 'scent', 'வாசனை'],
+  '/shop/cosmetics': ['cosmetics', 'makeup', 'மேக்கப்', 'मेकअप', 'beauty', 'skincare'],
+  '/shop/accessories': ['accessories', 'அக்சசரீஸ்', 'jewelry', 'belts', 'wallets', 'sunglasses'],
+  '/profile': ['profile', 'account', 'புரொஃபைல்', 'प्रोफाइल', 'my account', 'my profile'],
+  '/settings': ['settings', 'செட்டிங்ஸ்', 'सेटिंग्स', 'preferences']
 };
 
 async function buildSmartFallback(message, lang, currentlyVisibleProducts = []) {
@@ -722,6 +727,10 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = []) 
   if (lower.match(/(scroll|கீழே|மேலே|नीचे|ऊपर)/)) {
     const dir = lower.match(/(up|மேலே|ऊपर)/) ? 'up' : 'down';
     return { text: "Scrolling " + dir, actions: [{ action: "SCROLL", direction: dir }], emotion: "happy", language: "en" };
+  }
+
+  if (lower.match(/(close|stop|bye|sleep|போயிடு|நிறுத்து|बंद करो|stop listening|go to sleep|shut up|dismiss|goodbye)/)) {
+    return { text: lang === 'tamil' ? "சரி, தூங்கப் போறேன்! என்னை கூப்பிடுங்க!" : "Going to sleep! Call my name when you need me!", actions: [{ action: "SLEEP" }], emotion: "happy", language: lang === 'tamil' ? 'ta' : 'en' };
   }
 
   // 3. Standard Navigation Intents (deals, mens, womens, cart)
