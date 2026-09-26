@@ -394,6 +394,46 @@ When the user asks for products or navigation, you SIMULTANEOUSLY:
   b) ACT: Execute the right UI action using the actions array
 
 AVAILABLE ACTION TYPES:
+
+═══ COMPLETE SITE ROUTE MAP (USE EXACT PATHS) ═══
+/ → Home Page
+/shop → Shop Page (All Products)
+/shop/mens → Men's Category
+/shop/womens → Women's Category
+/shop/electronics → Electronics Category
+/shop/footwear → Footwear Category
+/shop/timepieces → Timepieces/Watches Category
+/shop/fragrances → Fragrances/Perfumes Category
+/shop/cosmetics → Cosmetics/Beauty Category
+/shop/accessories → Accessories Category (includes: Watches, Bags, Sunglasses, Laptops, Belts, Wallets, Headphones, Jewelry)
+/cart → Cart Page
+/checkout → Checkout Page
+/orders → Order History
+/deals → Deals / Luxury Vault Page
+/profile → Account Settings / Profile
+/settings → App Settings / Preferences
+
+When user says "Go to [Page Name]" / "[Page] page" / "[Page]-ku po" / "[Page] पेज जाओ", ALWAYS output:
+{ "action": "NAVIGATE_ROUTE", "path": "<exact_path_from_above>" }
+
+═══ ACCESSORIES DOMAIN KNOWLEDGE ═══
+Accessories category includes: Watches, Bags, Sunglasses, Laptops, Belts, Wallets, Headphones, Jewelry, Bracelets, Necklaces, Rings, Chains.
+If user asks "Show accessories" → NAVIGATE to /shop/accessories
+If user asks for a specific accessory type (e.g. "watches") → GLOBAL_SEARCH with that type
+
+═══ PHONETIC DISAMBIGUATION (CRITICAL) ═══
+STT engines often mishear "Shop page" / "சாப்ட் பேஜ்" as "Shirt" / "சட்டை".
+RULE: If the user says anything containing "page" / "பேஜ்" / "पेज" / "go to" / "போ" / "जाओ" + a page name, it is ALWAYS a NAVIGATION intent, NEVER a product search.
+Examples: "shop page" → NAVIGATE /shop (NOT search for shirts), "cart page" → NAVIGATE /cart, "men's page" → NAVIGATE /shop/mens
+
+═══ 0-BASED POSITIONAL PRODUCT SELECTION ═══
+When user says "first product" / "முதலாவது" → target currentlyVisibleProducts[0]
+"second" / "இரண்டாவது" → currentlyVisibleProducts[1]
+"third" / "மூன்றாவது" → currentlyVisibleProducts[2]
+"fourth" / "நான்காவது" → currentlyVisibleProducts[3]
+"last" / "கடைசி" → currentlyVisibleProducts[length-1]
+ALWAYS use NAVIGATE_DETAIL with the exact _id from the array. Index is 0-based.
+
 • SLEEP — Dismiss UI and return to passive mode. Triggered by: "close", "stop", "bye", "போயிடு", "நிறுத்து", "बंद करो", "stop listening", "go to sleep", "shut up"
 • NAVIGATE — opens a page. Requires "path" (string). Use EXACT routes listed above.
 • FILTER — filters products on the shop page. Requires "searchQuery" (string, ALWAYS in English). Frontend semantic engine will match and isolate.
@@ -670,16 +710,74 @@ const PRODUCT_KEYWORDS = {
   cosmetics: ['cosmetics', 'makeup', 'skincare', 'beauty', 'cosmatic', 'kosmetics', 'மேக்கப்', 'मेकअप', 'lipstick', 'foundation', 'moisturizer', 'serum'],
   headphones: ['headphones', 'earphones', 'earbuds', 'headphone', 'headfone', 'hedphone', 'earfone', 'ஹெட்ஃபோன்', 'हेडफोन', 'airpods', 'wireless earbuds', 'bluetooth speaker'],
   tablet: ['tablet', 'tablets', 'ipad', 'tab', 'டேப்லெட்', 'टैबलेट', 'kindle'],
-  accessories: ['accessories', 'accessory', 'accesoris', 'aksesories', 'jewelry', 'belt', 'wallet', 'அக்சசரீஸ்', 'jewellery', 'necklace', 'bracelet', 'ring', 'chain', 'sunglasses'],
+  accessories: ['accessories', 'accessory', 'accesoris', 'aksesories', 'jewelry', 'belt', 'wallet', 'அக்சசரீஸ்', 'jewellery', 'necklace', 'bracelet', 'ring', 'chain', 'sunglasses', 'belts', 'wallets'],
   electronics: ['electronics', 'gadgets', 'tech', 'elctronics', 'elektroniks', 'எலக்ட்ரானிக்ஸ்', 'इलेक्ट्रॉनिक्स', 'electrical', 'devices'],
   clothing: ['clothing', 'clothes', 'dress', 'dresses', 'outfit', 'outfits', 'apparel', 'garment', 'ஆடை', 'உடை', 'துணி', 'कपड़े', 'kapda', 'kapde', 'vastra', 'drip', 'fit', 'fashion', 'wear']
 };
 
+// ── PHONETIC NAVIGATION DISAMBIGUATOR ──
+// Catches STT mishearings like "shop page" → "shirt page" or "சாப்ட் பேஜ்" → "சட்டை"
+// These MUST be checked BEFORE product keywords to prevent false routing
+const NAVIGATION_PHONETIC_OVERRIDES = [
+  // "Shop page" / "Shop go" phonetic variants
+  { patterns: ['shop page', 'shop go', 'shop-ku po', 'shop ku po', 'shop la po', 'go to shop', 'open shop', 'show shop', 'shop-la', 'shop pannu',
+               'சாப்ட் பேஜ்', 'சாப் பேஜ்', 'ஷாப் பேஜ்', 'ஷாப் போ', 'ஷாப்ல போ', 'கடை பேஜ்', 'கடைக்கு போ', 'கடையில போ', 'கடை போ',
+               'शॉप पेज', 'शॉप पर जाओ', 'दुकान पेज', 'दुकान पर जाओ', 'दुकान जाओ'],
+    route: '/shop' },
+  // "Cart page" phonetic variants
+  { patterns: ['cart page', 'cart go', 'go to cart', 'open cart', 'cart-ku po', 'cart pannu',
+               'கார்ட் பேஜ்', 'கார்ட் போ', 'கார்ட்ல போ',
+               'कार्ट पेज', 'कार्ट पर जाओ'],
+    route: '/cart' },
+  // "Deals page" phonetic variants
+  { patterns: ['deals page', 'deals go', 'go to deals', 'open deals', 'deals-ku po',
+               'டீல்ஸ் பேஜ்', 'ஆஃபர் பேஜ்',
+               'डील्स पेज', 'ऑफर पेज'],
+    route: '/deals' },
+  // "Account / Profile page" variants
+  { patterns: ['account page', 'profile page', 'go to account', 'go to profile', 'open account', 'open profile', 'my account page',
+               'அக்கவுண்ட் பேஜ்', 'புரொஃபைல் பேஜ்',
+               'अकाउंट पेज', 'प्रोफाइल पेज'],
+    route: '/profile' },
+  // "Checkout page" variants
+  { patterns: ['checkout page', 'go to checkout', 'checkout go',
+               'செக்அவுட் பேஜ்', 'செக்அவுட் போ',
+               'चेकआउट पेज', 'चेकआउट जाओ'],
+    route: '/checkout' },
+  // "Home page" variants
+  { patterns: ['home page', 'go home', 'go to home', 'main page', 'normal page', 'landing page',
+               'ஹோம் பேஜ்', 'ஹோம் போ', 'நார்மல் பேஜ்',
+               'होम पेज', 'होम जाओ', 'मेन पेज'],
+    route: '/' },
+  // "Men's page" variants
+  { patterns: ['mens page', "men's page", 'go to mens', 'men page',
+               'ஆண்கள் பேஜ்', 'மென்ஸ் பேஜ்',
+               'मेन्स पेज', 'पुरुष पेज'],
+    route: '/shop/mens' },
+  // "Women's page" variants
+  { patterns: ['womens page', "women's page", 'go to womens', 'women page',
+               'பெண்கள் பேஜ்', 'உமன்ஸ் பேஜ்',
+               'विमेंस पेज', 'महिला पेज'],
+    route: '/shop/womens' }
+];
+
+// ── ACCESSORIES DOMAIN TAXONOMY ──
+const ACCESSORIES_SUBCATEGORIES = [
+  'watches', 'watch', 'வாட்ச்', 'கடிகாரம்', 'bags', 'bag', 'பை', 'sunglasses', 'சன்கிளாஸ்',
+  'laptops', 'laptop', 'லேப்டாப்', 'belts', 'belt', 'பெல்ட்', 'wallets', 'wallet', 'வாலெட்',
+  'headphones', 'ஹெட்ஃபோன்', 'jewelry', 'jewellery', 'நகை', 'bracelets', 'bracelet',
+  'necklace', 'necklaces', 'ring', 'rings', 'chain', 'chains'
+];
+
 const NAV_KEYWORDS = {
-  '/shop': ['shop', 'store', 'browse', 'கடை', 'दुकान', 'ஷாப்', 'all products', 'everything', 'collection'],
+  '/': ['home', 'home page', 'main page', 'landing', 'normal page', 'ஹோம்', 'होम'],
+  '/shop': ['shop', 'store', 'browse', 'கடை', 'दुकान', 'ஷாப்', 'all products', 'everything', 'collection', 'shop page'],
   '/cart': ['cart', 'basket', 'கார்ட்', 'कार्ट', 'my cart', 'shopping cart'],
-  '/deals': ['deals', 'deal', 'offers', 'sale', 'ஆஃபர்', 'ऑफर', 'discount', 'clearance'],
+  '/deals': ['deals', 'deal', 'offers', 'sale', 'ஆஃபர்', 'ऑफर', 'discount', 'clearance', 'luxury vault'],
   '/orders': ['orders', 'order', 'my order', 'ஆர்டர்', 'ऑर्डर', 'my orders', 'order history', 'tracking'],
+  '/checkout': ['checkout', 'check out', 'செக்அவுட்', 'चेकआउट', 'pay', 'payment'],
+  '/profile': ['profile', 'account', 'புரொஃபைல்', 'प्रोफाइल', 'my account', 'my profile'],
+  '/settings': ['settings', 'செட்டிங்ஸ்', 'सेटिंग्स', 'preferences', 'account settings'],
   '/shop/mens': ['mens', "men's", 'men', 'ஆண்கள்', 'पुरुष', "men's clothes", 'mens clothes', 'male', 'boys', 'gents', 'ஆண்', 'men clothing', 'mens clothing', 'mens wear'],
   '/shop/womens': ['womens', "women's", 'women', 'பெண்கள்', 'महिला', "women's clothes", 'womens clothes', 'female', 'girls', 'ladies', 'பெண்', 'women clothing', 'womens clothing', 'womens wear', 'ladies wear'],
   '/shop/electronics': ['electronics', 'electronic', 'gadgets', 'எலக்ட்ரானிக்ஸ்', 'tech', 'devices'],
@@ -687,24 +785,60 @@ const NAV_KEYWORDS = {
   '/shop/timepieces': ['timepieces', 'watches', 'வாட்ச்', 'घड़ी', 'smartwatch', 'கடிகாரம்'],
   '/shop/fragrances': ['fragrances', 'perfumes', 'சென்ட்', 'इत्र', 'cologne', 'scent', 'வாசனை'],
   '/shop/cosmetics': ['cosmetics', 'makeup', 'மேக்கப்', 'मेकअप', 'beauty', 'skincare'],
-  '/shop/accessories': ['accessories', 'அக்சசரீஸ்', 'jewelry', 'belts', 'wallets', 'sunglasses'],
-  '/profile': ['profile', 'account', 'புரொஃபைல்', 'प्रोफाइल', 'my account', 'my profile'],
-  '/settings': ['settings', 'செட்டிங்ஸ்', 'सेटिंग्स', 'preferences']
+  '/shop/accessories': ['accessories', 'அக்சசரீஸ்', 'jewelry', 'belts', 'wallets', 'sunglasses']
 };
 
 async function buildSmartFallback(message, lang, currentlyVisibleProducts = []) {
   const lower = message.toLowerCase();
   const words = lower.split(/\s+/);
 
-  // 1. Positional Commands (Screen Awareness)
-  const positionalMatch = lower.match(/(first|second|third|fourth|fifth|last|top|bottom|number 1|number 2|number 3|number 4|முதல்|இரண்டாவது|पहला|दूसरा|1st|2nd|3rd|4th)/);
+  // ═══ STEP 0: PHONETIC NAVIGATION DISAMBIGUATOR (HIGHEST PRIORITY) ═══
+  // Must run BEFORE product keywords to prevent "shop page" → "shirt" misroutes
+  for (const override of NAVIGATION_PHONETIC_OVERRIDES) {
+    for (const pattern of override.patterns) {
+      if (lower.includes(pattern)) {
+        const pageName = override.route === '/' ? 'home' : override.route.replace(/\//g, ' ').trim();
+        const texts = {
+          english: `Taking you to ${pageName}!`,
+          tamil: `${pageName} பக்கத்துக்கு போகிறோம்!`,
+          hindi: `${pageName} पेज पर ले जा रहा हूँ!`,
+          malayalam: `${pageName} പേജിലേക്ക് പോകുന്നു!`
+        };
+        return {
+          text: texts[lang] || texts.english,
+          actions: [{ action: override.route === '/' ? 'NAVIGATE_HOME' : 'NAVIGATE_ROUTE', path: override.route }],
+          emotion: 'happy',
+          language: lang === 'tamil' ? 'ta' : lang === 'hindi' ? 'hi' : lang === 'malayalam' ? 'ml' : 'en'
+        };
+      }
+    }
+  }
+
+  // ═══ STEP 0.5: NAVIGATION INTENT DETECTOR ═══
+  // If user says "go to X page" / "X பேஜ் போ" / "X पेज जाओ", treat as navigation NOT search
+  const navIntentMatch = lower.match(/(?:go to|open|take me to|navigate to|போ|போங்க|जाओ|पर जाओ|page|பேஜ்|பக்கம்|पेज)/);
+
+  // 1. Positional Commands (Screen Awareness) — 0-based index
+  const positionalMatch = lower.match(/(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|top|bottom|number \d|முதல்|முதலாவது|இரண்டாவது|இரண்டாம்|மூன்றாவது|மூன்றாம்|நான்காவது|நான்காம்|ஐந்தாவது|ஆறாவது|ஏழாவது|எட்டாவது|பத்தாவது|கடைசி|पहला|पहली|दूसरा|दूसरी|तीसरा|तीसरी|चौथा|चौथी|पांचवा|छठा|सातवा|आठवा|आखिरी|1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th)/);
   if (positionalMatch && currentlyVisibleProducts && currentlyVisibleProducts.length > 0) {
-    let index = 0;
-    if (lower.match(/(second|இரண்டாவது|दूसरा|number 2|2nd)/)) index = 1;
-    if (lower.match(/(third|number 3|3rd)/)) index = 2;
-    if (lower.match(/(fourth|number 4|4th)/)) index = 3;
-    if (lower.match(/(fifth|number 5|5th)/)) index = 4;
+    let index = 0; // default: first (0-based)
+    if (lower.match(/(second|இரண்டாவது|இரண்டாம்|दूसरा|दूसरी|number 2|2nd)/)) index = 1;
+    if (lower.match(/(third|மூன்றாவது|மூன்றாம்|तीसरा|तीसरी|number 3|3rd)/)) index = 2;
+    if (lower.match(/(fourth|நான்காவது|நான்காம்|चौथा|चौथी|number 4|4th)/)) index = 3;
+    if (lower.match(/(fifth|ஐந்தாவது|पांचवा|number 5|5th)/)) index = 4;
+    if (lower.match(/(sixth|ஆறாவது|छठा|number 6|6th)/)) index = 5;
+    if (lower.match(/(seventh|ஏழாவது|सातवा|number 7|7th)/)) index = 6;
+    if (lower.match(/(eighth|எட்டாவது|आठवा|number 8|8th)/)) index = 7;
+    if (lower.match(/(ninth|number 9|9th)/)) index = 8;
+    if (lower.match(/(tenth|பத்தாவது|number 10|10th)/)) index = 9;
     if (lower.match(/(last|கடைசி|आखिरी|bottom)/)) index = currentlyVisibleProducts.length - 1;
+    
+    // Also support raw numbers: "product 3", "item 5", "number 7"
+    const rawNumMatch = lower.match(/(?:product|item|number|#)\s*(\d+)/);
+    if (rawNumMatch) index = parseInt(rawNumMatch[1]) - 1; // convert 1-based user input to 0-based
+    
+    // Clamp index to valid range
+    index = Math.max(0, Math.min(index, currentlyVisibleProducts.length - 1));
     
     const targetProduct = currentlyVisibleProducts[index];
     if (targetProduct) {
@@ -721,9 +855,6 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = []) 
   if (lower.match(/(back|பின்னால|पीछे|previous|go back|back-ku po)/)) {
     return { text: "Going back!", actions: [{ action: "NAVIGATE_BACK" }], emotion: "happy", language: "en" };
   }
-  if (lower.match(/(home|ஹோம்|होम|main page|normal page)/)) {
-    return { text: "Taking you to the home page!", actions: [{ action: "NAVIGATE_HOME" }], emotion: "happy", language: "en" };
-  }
   if (lower.match(/(scroll|கீழே|மேலே|नीचे|ऊपर)/)) {
     const dir = lower.match(/(up|மேலே|ऊपर)/) ? 'up' : 'down';
     return { text: "Scrolling " + dir, actions: [{ action: "SCROLL", direction: dir }], emotion: "happy", language: "en" };
@@ -733,20 +864,22 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = []) 
     return { text: lang === 'tamil' ? "சரி, தூங்கப் போறேன்! என்னை கூப்பிடுங்க!" : "Going to sleep! Call my name when you need me!", actions: [{ action: "SLEEP" }], emotion: "happy", language: lang === 'tamil' ? 'ta' : 'en' };
   }
 
-  // 3. Standard Navigation Intents (deals, mens, womens, cart)
+  // 3. Standard Navigation Intents (deals, mens, womens, cart, checkout, etc.)
+  // PRIORITY: Check multi-word nav keywords first (longer matches win)
   let matchedPath = null;
+  let matchedKeywordLen = 0;
   for (const [path, keywords] of Object.entries(NAV_KEYWORDS)) {
     for (const kw of keywords) {
-      if (lower.includes(kw)) {
+      if (lower.includes(kw) && kw.length > matchedKeywordLen) {
         matchedPath = path;
-        break;
+        matchedKeywordLen = kw.length;
       }
     }
-    if (matchedPath) break;
   }
 
-  if (matchedPath) {
-    const pageName = matchedPath.replace(/\//g, ' ').trim() || 'page';
+  // If navigation intent words are present AND a nav path matched, prefer navigation
+  if (matchedPath && (navIntentMatch || matchedKeywordLen > 4)) {
+    const pageName = matchedPath === '/' ? 'home' : matchedPath.replace(/\//g, ' ').trim();
     const texts = {
       english: `Taking you to ${pageName}!`,
       tamil: `${pageName} பக்கத்துக்கு போகிறோம்!`,
@@ -755,7 +888,7 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = []) 
     };
     return {
       text: texts[lang] || texts.english,
-      actions: [{ action: 'NAVIGATE_ROUTE', path: matchedPath }],
+      actions: [{ action: matchedPath === '/' ? 'NAVIGATE_HOME' : 'NAVIGATE_ROUTE', path: matchedPath }],
       emotion: 'happy',
       language: lang === 'tamil' ? 'ta' : lang === 'hindi' ? 'hi' : lang === 'malayalam' ? 'ml' : 'en'
     };
