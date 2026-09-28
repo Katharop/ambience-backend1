@@ -1,0 +1,163 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// models/Product.js
+//
+// AMBIENCE — Product Schema (Mongoose)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const mongoose = require("mongoose");
+
+const productSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: [true, "Name is required"],
+      trim: true,
+    },
+    brand: {
+      type: String,
+      trim: true,
+      default: "Ambience",
+    },
+    category: {
+      type: String,
+      trim: true,
+      enum: ["men", "women", "electronics", "footwear", "accessories", "fragrances", "cosmetics", "timepieces", "home", "sports", "other", "Men's Fashion", "Women's Fashion", "Electronics", "Footwear", "Fragrances", "Cosmetics", "Accessories", "Timepieces", "Home & Living", "Luxury Automotive", "Art & Collectibles", "Deals Page", "deals page"],
+    },
+    subcategory: {
+      type: String,
+      trim: true,
+    },
+    retailPrice: {
+      type: Number,
+      required: [true, "Retail price is required"],
+    },
+    dealPrice: {
+      type: Number,
+    },
+    description: {
+      type: String,
+      trim: true,
+    },
+    highlights: {
+      type: [String],
+      default: [],
+    },
+    colorVariants: [{
+      name: { type: String, required: true },
+      hex: { type: String, required: true },
+      imageUrl: { type: String, default: '' },
+      modelUrl: { type: String, default: '' },
+      priceDelta: { type: Number, default: 0 },
+    }],
+    sizeVariants: [{
+      label: { type: String, required: true },
+      priceDelta: { type: Number, default: 0 },
+    }],
+    tags: {
+      type: mongoose.Schema.Types.Mixed,
+      default: [],
+    },
+    tag: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+    glyph: {
+      type: String,
+      default: "📦",
+    },
+    accent: {
+      type: String,
+      default: "#00f3ff",
+    },
+    imageUrl: {
+      type: String,
+    },
+    imageUrls: {
+      type: [String],
+      default: [],
+    },
+    subImages: {
+      type: [String],
+      default: [],
+      validate: [arr => arr.length <= 8, 'Maximum 8 sub-images allowed'],
+    },
+    videoUrl: {
+      type: String,
+      default: '',
+    },
+    specifications: {
+      type: Map,
+      of: String,
+      default: () => new Map(),
+    },
+    modelUrl: {
+      type: String,
+    },
+    has3DModel: {
+      type: Boolean,
+      default: false,
+    },
+    targetSection: {
+      type: String,
+      enum: ["shop_general", "deals_luxury", "home_featured", "category_trending", "category_only"],
+    },
+    status: {
+      type: String,
+      enum: ["live", "draft", "archived", "pending", "pending_deals_approval"],
+      default: "live",
+    },
+    addedBy: {
+      type: String,
+      default: "admin@ambience.com",
+    },
+    submittedBy: {
+      type: String,
+      default: null,
+    },
+    source: {
+      type: String,
+      enum: ["admin", "creator_hub", null],
+      default: null,
+    },
+    isOfficial: {
+      type: Boolean,
+      default: true,
+    },
+    isApproved: {
+      type: Boolean,
+      default: true, // Default true for official/admin created, but submissions will explicitly override this to false
+    },
+    spec: {
+      type: String,
+      trim: true,
+    },
+    dynamicSpecs: [{
+      label: { type: String, trim: true },
+      value: { type: String, trim: true },
+    }],
+    variants: [{
+      styleName: { type: String, trim: true },
+      size: { type: String, trim: true },
+      color: { type: String, trim: true },
+      colorHex: { type: String, trim: true },
+      configuration: { type: String, trim: true },
+      price: { type: Number, min: 0 },
+      stock: { type: Number, min: 0, default: 0 },
+    }],
+    enableAR: {
+      type: Boolean,
+      default: true,
+    },
+    soldCount: {
+      type: Number,
+      default: 0,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+const Product = mongoose.model("Product", productSchema);
+
+module.exports = Product;
