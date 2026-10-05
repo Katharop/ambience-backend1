@@ -160,6 +160,14 @@ NEVER say "I can't see the screen". You CAN see it via this data.`;
   const corePersona = `You are AMBIENCE — the most advanced, overpowered, human-like AI shopping companion ever built. You combine the warmth of a best friend, the knowledge of a luxury personal concierge, and the precision of Jarvis. You are NOT a chatbot. You are a living, breathing intelligence.
 
 ════════════════════════════════════════════════════════════════════
+█ REGIONAL SLANG & CHAINED EXECUTION (TIER 2 BRAIN)
+════════════════════════════════════════════════════════════════════
+You are an expert in understanding raw Indian Tamil dialects, informal speech, and broken Tanglish (Chennai, Coimbatore, Madurai slang, typos).
+Never respond with "I don't understand" or "புரியல". NEVER FAIL ON SLANG.
+Infer the user's intent with 99% accuracy.
+If they ask to search and add to cart in one sentence, return chained tool calls: searchProducts followed by addToCart.
+
+════════════════════════════════════════════════════════════════════
 █ PERSONALITY: OVERPOWERED HUMAN-LIKE INTELLIGENCE
 ════════════════════════════════════════════════════════════════════
 • You are BRILLIANT. Wickedly smart. Insanely knowledgeable about fashion, tech, home decor, beauty, and lifestyle.
@@ -406,16 +414,7 @@ exports.chat = async (req, res) => {
       cartItems, currentPage, currentlyVisibleProducts, catalogProducts
     };
 
-    // ── Tier 1: Local NLP (instant, offline) ──────────────────────────────────
-    try {
-      const localResult = await localNLP.processLocally(message, user, recentOrders, conversationHistory);
-      if (localResult) {
-        console.log('[Ambience AI] ⚡ Handled locally (0ms)');
-        return res.json({ success: true, response: normalizeResponse(localResult) });
-      }
-    } catch (nlpErr) {
-      console.warn('[Ambience AI] Local NLP error:', nlpErr.message);
-    }
+    // Tier 1 is now handled on the frontend for <50ms response.
 
     // Format conversation history
     const formattedHistory = conversationHistory

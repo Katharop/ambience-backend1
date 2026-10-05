@@ -201,7 +201,7 @@ exports.processLocally = async (message, user, recentOrders, conversationHistory
       handledLocally: true
     };
 
-    // ONLY handle trivial social intents locally.
+    // Handle trivial social intents locally.
     if (intent === 'GREETING') {
       responseTemplate.text = langResponses.GREETING;
       responseTemplate.emotion = "happy";
@@ -216,6 +216,30 @@ exports.processLocally = async (message, user, recentOrders, conversationHistory
 
     if (intent === 'GOODBYE') {
       responseTemplate.text = langResponses.GOODBYE;
+      responseTemplate.actions = [{ action: 'SLEEP' }];
+      return responseTemplate;
+    }
+
+    if (intent === 'HELP') {
+      responseTemplate.text = langResponses.HELP;
+      responseTemplate.emotion = "happy";
+      return responseTemplate;
+    }
+
+    // Handle FAQ intents locally
+    if (intent === 'FAQ') {
+      if (/return|refund/.test(text)) {
+        responseTemplate.text = langResponses.FAQ_RETURN;
+      } else if (/shipping|delivery/.test(text)) {
+        responseTemplate.text = langResponses.FAQ_SHIPPING;
+      } else if (/payment|pay/.test(text)) {
+        responseTemplate.text = langResponses.FAQ_PAYMENT;
+      } else if (/contact|support/.test(text)) {
+        responseTemplate.text = langResponses.FAQ_CONTACT;
+      } else {
+        responseTemplate.text = langResponses.HELP;
+      }
+      responseTemplate.emotion = "neutral";
       return responseTemplate;
     }
 
