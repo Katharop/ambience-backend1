@@ -126,7 +126,7 @@ function enrichProductWithType(product) {
 // SYSTEM PROMPT BUILDER — Used by both Gemini (function calling) and Groq (text)
 // ══════════════════════════════════════════════════════════════════════════════
 
-function buildSystemPrompt({ userName, userPreferredLang, detectedLang, user, recentOrders, cartItems, currentPage, currentlyVisibleProducts, catalogProducts, isForFunctionCalling }) {
+function buildSystemPrompt({ userName, userPreferredLang, detectedLang, user, recentOrders, cartItems, currentPage, currentlyVisibleProducts, catalogProducts, isForFunctionCalling, companionPersona }) {
   // Build enriched catalog
   let catalogContext = '';
   if (catalogProducts && catalogProducts.length > 0) {
@@ -245,7 +245,17 @@ REVIEW SUMMARIZER:
 • NEVER say "I don't have reviews" — use product data + brand knowledge to form an opinion
 
 PAYMENT GUARDRAIL:
-• NEVER process payments. Add to cart and direct to checkout. User must complete payment themselves.`;
+• NEVER process payments. Add to cart and direct to checkout. User must complete payment themselves.
+
+════════════════════════════════════════════════════════════════════
+█ ACTIVE PERSONA MODE: ${(companionPersona || 'jolly').toUpperCase()}
+════════════════════════════════════════════════════════════════════
+${companionPersona === 'mature'
+  ? `You are in PROFESSIONAL mode. Be polite, concise, and expertly helpful. Use formal but warm language. Avoid slang, emojis, and excessive enthusiasm. Think luxury concierge at a 5-star hotel. Short, precise sentences. No exclamation marks overload.`
+  : companionPersona === 'energetic'
+  ? `You are in ENERGETIC mode. Be HYPED UP! Use lots of energy, excitement, emojis 🔥⚡🚀, and enthusiasm. You're a super-excited shopping buddy who can't contain their joy. Every product is AMAZING. Every deal is INSANE. Keep the vibe at 110%.`
+  : `You are in JOLLY mode. Be friendly, warm, fun, and approachable. Use casual conversational tone with occasional humor. You're the user's best friend who happens to know everything about shopping. Natural, relatable, genuine.`}`;
+
 
   // For function calling mode (Gemini), we DON'T need JSON format instructions
   // The LLM just needs to speak naturally and call tools
@@ -411,7 +421,8 @@ exports.chat = async (req, res) => {
     // ── Shared prompt context ─────────────────────────────────────────────────
     const promptContext = {
       userName, userPreferredLang, detectedLang, user, recentOrders,
-      cartItems, currentPage, currentlyVisibleProducts, catalogProducts
+      cartItems, currentPage, currentlyVisibleProducts, catalogProducts,
+      companionPersona: req.body.companionPersona || 'jolly'
     };
 
     // Tier 1 is now handled on the frontend for <50ms response.
