@@ -28,11 +28,16 @@ const User = require("../models/User");
 // (frontend on Netlify/Vercel, backend on Render = different domains)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const getCookieOptions = () => ({
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-});
+const getCookieOptions = () => {
+  // Supports SameSite=Strict for custom single-domain deployments,
+  // or SameSite=None for cross-site (e.g. Vercel frontend + Render backend)
+  const sameSiteSetting = process.env.COOKIE_SAMESITE || (process.env.NODE_ENV === "production" ? "none" : "lax");
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production" || sameSiteSetting === "none",
+    sameSite: sameSiteSetting,
+  };
+};
 
 const REFRESH_COOKIE_NAME = "ambience_refresh";
 

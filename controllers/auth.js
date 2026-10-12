@@ -1063,7 +1063,7 @@ exports.forgotPassword = async (req, res) => {
       });
     }
 
-    if (!isEmailConfigured()) {
+    if (process.env.NODE_ENV !== 'production' && !isEmailConfigured()) {
       console.log(`\n  🔑  DEV RESET OTP for ${sanitizedEmail}: ${otp}\n`);
     }
 
@@ -1231,7 +1231,7 @@ exports.resendOTP = async (req, res) => {
       });
     }
 
-    if (!isEmailConfigured()) {
+    if (process.env.NODE_ENV !== 'production' && !isEmailConfigured()) {
       console.log(
         `\n  🔑  DEV RESEND OTP for ${sanitizedEmail}: ${otp}\n`
       );

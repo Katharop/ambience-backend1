@@ -887,7 +887,6 @@ app.get("/api/products/pending", protect, restrictTo("admin"), async (req, res) 
     return res.status(200).json({ success: true, products });
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error fetching pending products:", error.message);
-    console.error("[AMBIENCE]    Stack:", error.stack);
     return res.status(500).json({
       success: false,
       error: "Failed to fetch pending products",
@@ -919,7 +918,7 @@ app.get('/api/products/pending-deals', protect, restrictTo('admin'), async (req,
     const deals = await Product.find({ status: 'pending_deals_approval' }).sort({ createdAt: -1 });
     res.json({ success: true, deals });
   } catch (err) {
-    console.error('[Deals Queue]', err);
+    console.error('[Deals Queue]', err.message);
     res.status(500).json({ success: false, message: 'Failed to fetch deals queue' });
   }
 });
@@ -1381,7 +1380,6 @@ app.post("/api/products/create", protect, async (req, res) => {
     });
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error submitting product:", error.message);
-    console.error("[AMBIENCE]    Stack:", error.stack);
     // Return Mongoose validation errors cleanly
     if (error.name === "ValidationError") {
       const messages = Object.values(error.errors).map(e => e.message);
@@ -1468,7 +1466,7 @@ app.put('/api/products/:id/approve-deals', protect, restrictTo('admin'), async (
     console.log(`[AMBIENCE] 👑 Deals product approved: "${product.name}" → Royal Vault`);
     res.json({ success: true, message: 'Product approved to Deals Vault', product });
   } catch (err) {
-    console.error('[Deals Approve]', err);
+    console.error('[Deals Approve]', err.message);
     res.status(500).json({ success: false, message: 'Failed to approve deals product' });
   }
 });
@@ -1523,7 +1521,7 @@ app.post('/api/subscription/pro/activate', protect, async (req, res) => {
       isProMember: user.isProMember,
     });
   } catch (err) {
-    console.error('[Pro Activate]', err);
+    console.error('[Pro Activate]', err.message);
     res.status(500).json({ message: 'Failed to activate Pro Plan' });
   }
 });
@@ -1539,7 +1537,7 @@ app.get('/api/subscription/pro/status', protect, async (req, res) => {
       isProMember: user.isProMember,
     });
   } catch (err) {
-    console.error('[Pro Status]', err);
+    console.error('[Pro Status]', err.message);
     res.status(500).json({ message: 'Failed to fetch Pro status' });
   }
 });
@@ -1735,7 +1733,7 @@ app.get('/api/orders/:orderId/invoice', protect, async (req, res) => {
 app.use((req, res) => {
   res.status(404).json({
     success: false,
-    error: `Route ${req.method} ${req.originalUrl} not found.`,
+    error: "The requested endpoint does not exist.",
   });
 });
 
@@ -1767,7 +1765,7 @@ app.use((err, req, res, _next) => {
   }
 
   // Catch-all
-  console.error("[Global Error Handler] Unhandled error:", err.stack || err.message);
+  console.error("[Global Error Handler] Unhandled error:", process.env.NODE_ENV === 'production' ? err.message : (err.stack || err.message));
   return res.status(500).json({
     success: false,
     error: process.env.NODE_ENV === "production"
@@ -1795,7 +1793,7 @@ const startServer = async () => {
     console.log(`  📸  Photo API:  ${SERVER_URL}/api/process-photo`);
     console.log(`  🖼️   Assets:     ${SERVER_URL}/assets/`);
     console.log(`  💚  Health:     ${SERVER_URL}/api/health`);
-    console.log(`  💳  Razorpay:   ${process.env.RAZORPAY_KEY_ID ? "Test Mode (" + process.env.RAZORPAY_KEY_ID.substring(0, 12) + "...)" : "⚠️  Not configured"}`);
+    console.log(`  💳  Razorpay:   ${process.env.RAZORPAY_KEY_ID ? "Configured ✓" : "⚠️  Not configured"}`);
     console.log(`  📧  SMTP:       ${isEmailConfigured() ? "Gmail (" + GMAIL_USER + ")" : "⚠️  Not configured (dev mode)"}`);
     console.log("══════════════════════════════════════════════════════════");
     console.log("");

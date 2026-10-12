@@ -140,28 +140,45 @@ const createOrder = async (req, res) => {
     }
 
     // ── Calculate amounts using validated prices ────────────────────────────
-    const validatedItems = items.map((item) => {
+    const validatedItems = [];
+    for (const item of items) {
       const productId = item.productId || item.id || "unknown";
       const dbProduct = dbProducts[productId];
 
-      // Use DB price if available, otherwise trust client price
       let verifiedPrice = item.priceINR;
-      if (dbProduct && typeof dbProduct.priceINR === "number") {
-        verifiedPrice = dbProduct.priceINR;
-        if (Math.abs(verifiedPrice - item.priceINR) > 0.01) {
-          console.warn(
-            `[PAYMENT] ⚠️ Price mismatch for "${item.name}": ` +
-            `client=${item.priceINR}, DB=${verifiedPrice} — using DB price`
-          );
+
+      if (dbProduct) {
+        // SECURITY: Use DB price — dealPrice first, then retailPrice, then priceINR
+        const dbPrice = dbProduct.dealPrice || dbProduct.retailPrice || dbProduct.priceINR;
+        if (typeof dbPrice === "number" && dbPrice > 0) {
+          if (Math.abs(dbPrice - item.priceINR) > 0.01) {
+            console.warn(
+              `[PAYMENT] ⚠️ Price mismatch for "${item.name}": ` +
+              `client=${item.priceINR}, DB=${dbPrice} — using DB price`
+            );
+          }
+          verifiedPrice = dbPrice;
         }
+      } else if (IS_PRODUCTION && productId !== "unknown") {
+        // SECURITY: In production, reject items not found in DB
+        // This prevents price tampering with fabricated product IDs
+        console.error(
+          `[PAYMENT] ⛔ Product "${item.name}" (ID: ${productId}) not found in DB — ` +
+          `rejecting in production mode | User: ${req.user.email}`
+        );
+        return res.status(400).json({
+          success: false,
+          error: `Product "${item.name}" could not be verified. Please refresh your cart and try again.`,
+          code: "PRODUCT_NOT_VERIFIED",
+        });
       }
 
-      return {
+      validatedItems.push({
         ...item,
         priceINR: verifiedPrice,
         productId,
-      };
-    });
+      });
+    }
 
     const subtotalINR = validatedItems.reduce(
       (sum, item) => sum + item.priceINR * item.qty, 0
