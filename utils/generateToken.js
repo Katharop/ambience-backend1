@@ -25,7 +25,7 @@ const crypto = require("crypto");
  * @param {string} expiresIn    — Override expiry (default: "15m")
  * @returns {string} — Signed JWT access token
  */
-const generateAccessToken = (userId, email, role = "customer", tokenVersion = 0, expiresIn = "15m") => {
+const generateAccessToken = (userId, email, role = "customer", tokenVersion = 0, expiresIn = "15m", options = {}) => {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
     throw new Error("JWT_SECRET is not defined in environment variables.");
@@ -38,6 +38,9 @@ const generateAccessToken = (userId, email, role = "customer", tokenVersion = 0,
       role,
       type: "access",
       tokenVersion,
+      // Advisory claim — subscriptionGuard ALWAYS verifies against the DB.
+      // This is a convenience for the frontend to show/hide UI elements.
+      ...(options.isProMember !== undefined && { isProMember: options.isProMember }),
     },
     secret,
     {

@@ -152,6 +152,19 @@ const productSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // ── Commission Model ────────────────────────────────────────────────────
+    // Standard sellers (non-Deals): 5% commission per sale
+    // Deal Page sellers (Pro subscribers): 0% commission (subscription covers it)
+    commissionRate: {
+      type: Number,
+      default: 0.05, // 5% standard commission
+      min: 0,
+      max: 1,
+    },
+    commissionAmount: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,

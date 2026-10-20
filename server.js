@@ -53,6 +53,11 @@ const { restrictTo }            = require("./middleware/authMiddleware");
 const paymentController = require("./controllers/paymentController");
 const { handleWebhook }   = require("./controllers/webhookController");
 
+// ── Subscription system imports ─────────────────────────────────────────────
+const subscriptionController = require("./controllers/subscriptionController");
+const { requireActiveSubscription } = require("./middleware/subscriptionGuard");
+const Subscription = require("./models/Subscription");
+
 // ── AI Assistant imports ────────────────────────────────────────────────────
 const aiAssistantController = require("./controllers/aiAssistant");
 
@@ -361,6 +366,14 @@ const paymentLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: "Too many payment requests. Please try again after 15 minutes." },
+});
+
+const subscriptionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10, // 10 subscription attempts per 15 minutes
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: "Too many subscription requests. Please try again after 15 minutes." },
 });
 
 const aiChatLimiter = rateLimit({
@@ -1367,6 +1380,10 @@ app.post("/api/products/create", protect, async (req, res) => {
       tag: req.body.tag || "CREATOR",
       glyph: "🎨",
       accent: "#a78bfa",
+      // ── Commission model ──
+      // Deal Page sellers (Pro subscribers): 0% commission (subscription covers it)
+      // Standard sellers: 5% commission per sale (deducted at checkout)
+      commissionRate: (category === 'Deals Page') ? 0 : 0.05,
     });
 
     await product.save();
@@ -1539,6 +1556,56 @@ app.get('/api/subscription/pro/status', protect, async (req, res) => {
   } catch (err) {
     console.error('[Pro Status]', err.message);
     res.status(500).json({ message: 'Failed to fetch Pro status' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STEP 4.7: Deals Page Subscription Gateway
+//
+// Secure subscription-gated access to the Deals Page / Luxury Wallet.
+// Creators must have an active Pro Plan subscription to:
+//   • View Deal Page products as a seller
+//   • Submit products to the Deals Page category
+//   • Access Deals Page analytics
+//
+// Security: Server-side DB verification of subscription status.
+//           JWT claims are NOT trusted — live DB lookup on every request.
+//
+// Pricing:
+//   • Monthly: ₹4,999/month
+//   • Annual:  ₹39,999/year (save 33%)
+//
+// Standard sellers (non-Deals) pay 5% commission per sale instead.
+// Deal Page subscribers pay 0% commission (subscription fee covers it).
+// ═══════════════════════════════════════════════════════════════════════════════
+app.post("/api/deals/subscribe",           subscriptionLimiter, protect, subscriptionController.createSubscriptionOrder);
+app.post("/api/deals/verify-subscription",  subscriptionLimiter, protect, subscriptionController.verifySubscriptionPayment);
+app.get("/api/deals/verify-subscription",   protect, subscriptionController.getSubscriptionStatus);
+app.post("/api/deals/cancel-subscription",  protect, subscriptionController.cancelSubscription);
+
+// ─── Deals Seller Access (SUBSCRIPTION-GATED) ──────────────────────────────
+// Sellers must have an active Pro subscription to access seller tools for Deals.
+// This endpoint is separate from the public /api/products/deals-live route.
+app.get('/api/deals/seller-products', protect, requireActiveSubscription, async (req, res) => {
+  try {
+    const mongoId = req.user?._id?.toString();
+    const uuidId = req.user?.userId;
+    const email = req.user?.email;
+    const orConditions = [];
+    if (mongoId) orConditions.push({ submittedBy: mongoId });
+    if (uuidId)  orConditions.push({ submittedBy: uuidId });
+    if (email)   orConditions.push({ submittedBy: email });
+
+    const sellerDeals = await Product.find({
+      $or: orConditions,
+      source: "creator_hub",
+      category: { $in: ["Deals Page", "deals page"] },
+    }).sort({ createdAt: -1 });
+
+    return res.status(200).json({ success: true, products: sellerDeals });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error fetching seller deals:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch seller deals' });
   }
 });
 
