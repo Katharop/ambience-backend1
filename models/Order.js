@@ -182,6 +182,39 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    refundAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    refundError: {
+      type: String,
+      default: null,
+    },
+
+    // ── Inventory Tracking ────────────────────────────────────────────────
+    inventoryDecremented: {
+      type: Boolean,
+      default: false,
+    },
+    inventoryShortfall: {
+      type: Boolean,
+      default: false,
+    },
+    inventoryShortfallDetails: {
+      type: Array,
+      default: [],
+    },
+    stockRestoredAt: {
+      type: Date,
+      default: null,
+    },
+    confirmationEmailSent: {
+      type: Boolean,
+      default: false,
+    },
+
     // ── Status Tracking ───────────────────────────────────────────────────
     paymentStatus: {
       type: String,
@@ -201,6 +234,15 @@ const orderSchema = new mongoose.Schema(
       },
       default: "Confirmed",
     },
+    cancellationReason: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    cancelledAt: {
+      type: Date,
+      default: null,
+    },
 
     // ── Shipping ──────────────────────────────────────────────────────────
     shippingAddress: {
@@ -215,6 +257,10 @@ const orderSchema = new mongoose.Schema(
       lng: { type: Number },
       formattedAddress: { type: String, default: '' }
     },
+    carrier: { type: String, trim: true, default: '' },
+    trackingNumber: { type: String, trim: true, default: '' },
+    shippedAt: { type: Date, default: null },
+    deliveredAt: { type: Date, default: null },
 
     // ── Metadata ──────────────────────────────────────────────────────────
     paidAt: {
@@ -236,7 +282,7 @@ orderSchema.index({ razorpay_order_id: 1, paymentStatus: 1 });
 orderSchema.pre('save', function (next) {
   if (this.isModified('paymentStatus') && this.paymentStatus === 'Success' && !this.invoiceNumber) {
     const d = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const rand = Math.random().toString(36).substring(2, 7).toUpperCase();
+    const rand = require('crypto').randomBytes(4).toString('hex').toUpperCase();
     this.invoiceNumber = `AMB-${d}-${rand}`;
     this.invoiceDate = new Date();
   }
@@ -257,6 +303,7 @@ orderSchema.virtual("displayAmount").get(function () {
 // Returns order data safe for frontend consumption.
 orderSchema.methods.toSafeObject = function () {
   return {
+    _id: this._id,
     orderId: this.orderId,
     items: this.items,
     amount: this.amount,
@@ -270,6 +317,18 @@ orderSchema.methods.toSafeObject = function () {
     razorpay_payment_id: this.razorpay_payment_id,
     itemCount: this.itemCount,
     displayAmount: this.displayAmount,
+    refundStatus: this.refundStatus,
+    refundId: this.refundId,
+    refundAmount: this.refundAmount,
+    inventoryDecremented: this.inventoryDecremented,
+    inventoryShortfall: this.inventoryShortfall,
+    confirmationEmailSent: this.confirmationEmailSent,
+    cancellationReason: this.cancellationReason,
+    cancelledAt: this.cancelledAt,
+    carrier: this.carrier,
+    trackingNumber: this.trackingNumber,
+    shippedAt: this.shippedAt,
+    deliveredAt: this.deliveredAt,
     paidAt: this.paidAt,
     createdAt: this.createdAt,
   };

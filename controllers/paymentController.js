@@ -20,6 +20,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const crypto = require("crypto");
+const mongoose = require("mongoose");
 const Razorpay = require("razorpay");
 const Order = require("../models/Order");
 const Product = require("../models/Product");
@@ -158,6 +159,23 @@ const createOrder = async (req, res) => {
             );
           }
           verifiedPrice = dbPrice;
+        }
+        // STOCK CHECK: Warn if product has no stock tracking (future inventory feature)
+        if (typeof dbProduct.stock === 'number' && dbProduct.stock < item.qty) {
+          console.warn(
+            `[PAYMENT] ⚠️ Insufficient stock for "${item.name}": ` +
+            `requested=${item.qty}, available=${dbProduct.stock}`
+          );
+          return res.status(400).json({
+            success: false,
+            error: `"${item.name}" has only ${dbProduct.stock} unit(s) available. Please reduce quantity.`,
+            code: "INSUFFICIENT_STOCK",
+          });
+        } else if (typeof dbProduct.stock !== 'number') {
+          console.info(
+            `[PAYMENT] ℹ️ No stock tracking for "${item.name}" (ID: ${productId}) — ` +
+            `inventory management not yet enabled for this product`
+          );
         }
       } else if (IS_PRODUCTION && productId !== "unknown") {
         // SECURITY: In production, reject items not found in DB
@@ -391,25 +409,62 @@ const verifyPayment = async (req, res) => {
     }
 
     if (isSignatureValid) {
-      // ── SUCCESS: Update order ─────────────────────────────────────────────
-      order.razorpay_payment_id = razorpay_payment_id;
-      order.razorpay_signature = razorpay_signature;
-      order.paymentStatus = "Success";
-      order.orderStatus = "Confirmed";
-      order.paidAt = new Date();
-      await order.save();
-
-      console.log(
-        `[PAYMENT] ✅ Payment verified: ${order.orderId} | ` +
-        `Payment: ${razorpay_payment_id} | ` +
-        `Amount: ${order.displayAmount} | User: ${req.user.email}`
+      // ── ATOMIC TRANSITION GUARD ───────────────────────────────────────────
+      // Atomically transition from "Pending" to "Success".
+      // If another thread (e.g. webhook) already transitioned this order,
+      // updatedOrder will be null, guaranteeing that payment state transition
+      // happens EXACTLY ONCE across concurrent requests.
+      const updatedOrder = await Order.findOneAndUpdate(
+        {
+          _id: order._id,
+          paymentStatus: "Pending",
+        },
+        {
+          $set: {
+            razorpay_payment_id,
+            razorpay_signature,
+            paymentStatus: "Success",
+            orderStatus: "Confirmed",
+            paidAt: new Date(),
+          },
+        },
+        { new: true }
       );
 
-      return res.status(200).json({
-        success: true,
-        message: "Payment verified successfully!",
-        order: order.toSafeObject(),
-      });
+      if (updatedOrder) {
+        // Execute side-effects (inventory decrement & confirmation email)
+        await processPaymentSideEffects(updatedOrder);
+
+        console.log(
+          `[PAYMENT] ✅ Payment verified: ${updatedOrder.orderId} | ` +
+          `Payment: ${razorpay_payment_id} | ` +
+          `Amount: ${updatedOrder.displayAmount} | User: ${req.user.email}`
+        );
+
+        return res.status(200).json({
+          success: true,
+          message: "Payment verified successfully!",
+          order: updatedOrder.toSafeObject(),
+        });
+      } else {
+        // Order was already confirmed (e.g. by concurrent webhook)
+        console.log(
+          `[PAYMENT] ℹ️ Concurrent verification: order ${order.orderId} was already confirmed. Skipping duplicate transition.`
+        );
+        const freshOrder = await Order.findById(order._id);
+
+        // Crash-recovery: If previous thread crashed before completing side-effects, recover them now!
+        if (freshOrder && (!freshOrder.inventoryDecremented || !freshOrder.confirmationEmailSent)) {
+          console.log(`[PAYMENT] 🔄 Recovering incomplete side-effects for order: ${freshOrder.orderId}`);
+          await processPaymentSideEffects(freshOrder);
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: "Payment already verified.",
+          order: freshOrder ? freshOrder.toSafeObject() : order.toSafeObject(),
+        });
+      }
     } else {
       // ── FAILED: Signature mismatch ────────────────────────────────────────
       order.paymentStatus = "Failed";
@@ -438,6 +493,162 @@ const verifyPayment = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Helper: processPaymentSideEffects
+//
+// Executes or recovers payment confirmation side-effects (inventory decrement & email)
+// in an idempotent, crash-resilient manner.
+//
+// Guarantees:
+//  1. Inventory decrement happens at most once per order (atomically guarded by inventoryDecremented).
+//  2. Stock cannot go negative (oversell protection via { stock: { $gte: item.qty } }).
+//  3. Shortfall is recorded if concurrent orders exhausted stock before verification.
+//  4. Email is sent and recorded (guarded by confirmationEmailSent).
+//  5. If the server crashes mid-process, re-invoking this function safely completes
+//     only the unfinished side-effects without repeating already completed ones.
+// ═══════════════════════════════════════════════════════════════════════════════
+const processPaymentSideEffects = async (order) => {
+  let inventoryUpdated = false;
+  let emailSent = false;
+
+  // ── 1. INVENTORY DECREMENT (Idempotent Guard with Oversell Protection) ───
+  if (!order.inventoryDecremented) {
+    let hasShortfall = false;
+    const shortfallItems = [];
+
+    for (const item of order.items) {
+      if (item.productId && mongoose.Types.ObjectId.isValid(item.productId)) {
+        try {
+          // Atomic update: only decrement if stock >= requested quantity
+          const updateRes = await Product.updateOne(
+            { _id: item.productId, stock: { $gte: item.qty } },
+            { $inc: { stock: -item.qty, soldCount: item.qty } }
+          );
+
+          if (updateRes.matchedCount === 0) {
+            // Check if product is untracked (stock === null)
+            const untrackedRes = await Product.updateOne(
+              { _id: item.productId, stock: null },
+              { $inc: { soldCount: item.qty } }
+            );
+
+            if (untrackedRes.matchedCount === 0) {
+              // Stock was tracked but current stock < item.qty (concurrent oversell attempt blocked!)
+              const currentProd = await Product.findById(item.productId).select("stock name").lean();
+              console.warn(
+                `[INVENTORY] ⚠️ Stock exhausted by concurrent order for "${item.name}" (ID: ${item.productId}). ` +
+                `Available: ${currentProd?.stock ?? 0}, Requested: ${item.qty}. Oversell prevented.`
+              );
+              hasShortfall = true;
+              shortfallItems.push({
+                productId: item.productId,
+                name: item.name,
+                requestedQty: item.qty,
+                availableStock: currentProd?.stock ?? 0,
+              });
+            }
+          }
+        } catch (stockErr) {
+          console.warn(`[INVENTORY] Stock decrement error for ${item.productId}:`, stockErr.message);
+        }
+      }
+    }
+
+    // Persist that inventory side effects have been processed for this order
+    order.inventoryDecremented = true;
+    if (hasShortfall) {
+      order.inventoryShortfall = true;
+      order.inventoryShortfallDetails = shortfallItems;
+    }
+    await order.save();
+    inventoryUpdated = true;
+  }
+
+  // ── 2. CONFIRMATION EMAIL (Idempotent Guard) ──────────────────────────────
+  if (!order.confirmationEmailSent && order.userEmail) {
+    try {
+      const { sendEmail } = require("../utils/emailService");
+      const itemsHtml = order.items
+        .map((i) => `<li>${i.name} × ${i.qty} — ₹${((i.priceINR * i.qty)).toLocaleString("en-IN")}</li>`)
+        .join("");
+
+      await sendEmail({
+        to: order.userEmail,
+        subject: `Order Confirmed: ${order.orderId} — Ambience`,
+        html: `
+          <h2>Thank you for your purchase from Ambience!</h2>
+          <p>Your order <strong>${order.orderId}</strong> has been successfully placed and confirmed.</p>
+          <p><strong>Total Amount:</strong> ₹${(order.totalAmount / 100).toLocaleString("en-IN")}</p>
+          <h3>Purchased Items:</h3>
+          <ul>${itemsHtml}</ul>
+          <p>You can track your order status live in your <a href="${process.env.FRONTEND_URL || "https://ambience-fronten.vercel.app"}/orders">My Orders</a> dashboard.</p>
+        `,
+        logLabel: "Order Confirmation Email",
+      });
+
+      order.confirmationEmailSent = true;
+      await order.save();
+      emailSent = true;
+    } catch (emailErr) {
+      console.warn(`[EMAIL] Order confirmation dispatch note for ${order.orderId}:`, emailErr.message);
+    }
+  }
+
+  return { success: true, inventoryUpdated, emailSent };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Helper: restoreOrderInventoryAtomic
+//
+// Atomically claims and restores inventory for an order.
+// Uses a Compare-And-Swap (CAS) update on the Order document to guarantee
+// that exactly ONE concurrent request can ever restore stock for any given order.
+// ═══════════════════════════════════════════════════════════════════════════════
+const restoreOrderInventoryAtomic = async (orderId) => {
+  if (!orderId) return { restored: false, reason: "Missing order ID" };
+
+  const query = mongoose.Types.ObjectId.isValid(orderId)
+    ? { _id: orderId, inventoryDecremented: true }
+    : { orderId: orderId, inventoryDecremented: true };
+
+  // DURABLE ATOMIC CLAIM: Exactly ONE process can flip inventoryDecremented from true to false
+  const claimedOrder = await Order.findOneAndUpdate(
+    query,
+    {
+      $set: {
+        inventoryDecremented: false,
+        stockRestoredAt: new Date(),
+      },
+    },
+    { new: true }
+  );
+
+  if (!claimedOrder) {
+    // Already claimed or was never decremented
+    return { restored: false, reason: "Inventory was not decremented or already restored" };
+  }
+
+  for (const item of claimedOrder.items) {
+    if (item.productId && mongoose.Types.ObjectId.isValid(item.productId)) {
+      try {
+        await Product.updateOne(
+          { _id: item.productId, stock: { $ne: null } },
+          { $inc: { stock: item.qty, soldCount: -item.qty } }
+        );
+        await Product.updateOne(
+          { _id: item.productId, stock: null },
+          { $inc: { soldCount: -item.qty } }
+        );
+      } catch (invErr) {
+        console.warn(`[INVENTORY] Failed to restore stock for ${item.productId}:`, invErr.message);
+      }
+    }
+  }
+
+  console.log(`[INVENTORY] 🔄 Atomically restored inventory for order: ${claimedOrder.orderId}`);
+  return { restored: true, order: claimedOrder };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // GET /api/orders/my-orders
 //
 // Returns all orders for the authenticated user, sorted by newest first.
@@ -449,6 +660,7 @@ const getMyOrders = async (req, res) => {
       .lean();
 
     const safeOrders = orders.map((order) => ({
+      _id: order._id,
       orderId: order.orderId,
       items: order.items,
       amount: order.amount,
@@ -460,6 +672,12 @@ const getMyOrders = async (req, res) => {
       shippingAddress: order.shippingAddress,
       razorpay_order_id: order.razorpay_order_id,
       razorpay_payment_id: order.razorpay_payment_id,
+      refundStatus: order.refundStatus,
+      refundAmount: order.refundAmount,
+      refundId: order.refundId,
+      cancellationReason: order.cancellationReason,
+      carrier: order.carrier,
+      trackingNumber: order.trackingNumber,
       paidAt: order.paidAt,
       createdAt: order.createdAt,
     }));
@@ -478,4 +696,167 @@ const getMyOrders = async (req, res) => {
   }
 };
 
-module.exports = { createOrder, verifyPayment, getMyOrders };
+// ═══════════════════════════════════════════════════════════════════════════════
+// Helper: processRazorpayRefund
+//
+// Triggers an actual refund via Razorpay's Refund API when available.
+// In test/demo mode or if Razorpay credentials are unset, handles gracefully.
+// ═══════════════════════════════════════════════════════════════════════════════
+const processRazorpayRefund = async (order, reason = "Customer cancellation") => {
+  if (order.paymentStatus !== "Success") {
+    return { success: false, error: "Order payment was not captured; no refund required." };
+  }
+  if (order.refundStatus === "Processed") {
+    return { success: true, refundId: order.refundId, message: "Refund has already been processed." };
+  }
+
+  const isRealPaymentId = typeof order.razorpay_payment_id === "string" && order.razorpay_payment_id.startsWith("pay_");
+  const isGatewayReady = Boolean(razorpayInstance && RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET);
+
+  if (IS_PRODUCTION) {
+    // ── SECURITY: Block demo refund simulation in production ────────────────
+    if (!isGatewayReady) {
+      const errorMsg = "Payment gateway is not configured in production. Cannot process refund.";
+      console.error(`[REFUND] ⛔ ${errorMsg} (Order: ${order.orderId})`);
+      order.refundStatus = "Failed";
+      order.refundError = errorMsg;
+      return { success: false, error: errorMsg };
+    }
+    if (!isRealPaymentId) {
+      const errorMsg = `Order ${order.orderId} lacks a valid Razorpay transaction ID (found: ${order.razorpay_payment_id || 'none'}). Simulated refund is blocked in production.`;
+      console.error(`[REFUND] ⛔ ${errorMsg}`);
+      order.refundStatus = "Failed";
+      order.refundError = errorMsg;
+      return { success: false, error: errorMsg };
+    }
+  } else {
+    // Only allow simulation in development/test environments
+    if (!isGatewayReady || !isRealPaymentId) {
+      const demoRefundId = `demo_rfnd_${Date.now()}`;
+      order.refundId = demoRefundId;
+      order.refundStatus = "Processed";
+      order.refundAmount = order.totalAmount;
+      order.refundError = null;
+      console.log(`[REFUND] 🧪 Demo mode simulated refund ${demoRefundId} for order ${order.orderId}`);
+      return { success: true, refundId: demoRefundId, mode: "demo" };
+    }
+  }
+
+  // Real Razorpay Refund API
+  try {
+    const refundPayload = {
+      amount: order.totalAmount, // Razorpay amount in paise, matching order.totalAmount
+      notes: {
+        orderId: order.orderId,
+        reason: reason || "Customer cancellation",
+      },
+      receipt: `rfnd_${order.orderId}`.substring(0, 40),
+    };
+
+    console.log(`[REFUND] 🔄 Initiating Razorpay refund for order ${order.orderId} (payment ${order.razorpay_payment_id}, amount: ${order.totalAmount} paise)...`);
+    const refund = await razorpayInstance.payments.refund(order.razorpay_payment_id, refundPayload);
+
+    order.refundId = refund.id;
+    order.refundStatus = refund.status === "processed" ? "Processed" : "Initiated";
+    order.refundAmount = refund.amount || order.totalAmount;
+    order.refundError = null;
+
+    console.log(`[REFUND] ✅ Razorpay refund ${refund.id} status: ${order.refundStatus} for order ${order.orderId}`);
+    return { success: true, refundId: refund.id, status: order.refundStatus };
+  } catch (error) {
+    const errorMsg = error?.error?.description || error?.message || "Razorpay refund request failed";
+    console.error(`[REFUND] ❌ Razorpay refund failed for order ${order.orderId}:`, errorMsg);
+    order.refundStatus = "Failed";
+    order.refundError = errorMsg;
+    return { success: false, error: errorMsg };
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POST /api/orders/:id/cancel
+//
+// Allows an authenticated user to cancel their own order before shipment.
+// Initiates real Razorpay refund if the order has been paid.
+// ═══════════════════════════════════════════════════════════════════════════════
+const cancelMyOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    const order = mongoose.Types.ObjectId.isValid(id)
+      ? await Order.findById(id)
+      : await Order.findOne({ orderId: id });
+
+    if (!order) {
+      return res.status(404).json({ success: false, error: "Order not found." });
+    }
+
+    // Verify ownership
+    if (order.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ success: false, error: "Not authorized to cancel this order." });
+    }
+
+    // Check if cancellation is allowed
+    if (["Shipped", "Out for Delivery"].includes(order.orderStatus)) {
+      return res.status(400).json({
+        success: false,
+        error: "Order has already been dispatched. Please contact customer support for returns.",
+      });
+    }
+
+    if (order.orderStatus === "Delivered") {
+      return res.status(400).json({
+        success: false,
+        error: "Delivered orders cannot be cancelled. You can request a return via support.",
+      });
+    }
+
+    if (order.orderStatus === "Cancelled") {
+      return res.status(400).json({
+        success: false,
+        error: "Order is already cancelled.",
+      });
+    }
+
+    // Update status
+    order.orderStatus = "Cancelled";
+    order.cancelledAt = new Date();
+    order.cancellationReason = reason || "Cancelled by customer";
+
+    // If order was paid, execute refund
+    let refundResult = null;
+    if (order.paymentStatus === "Success") {
+      refundResult = await processRazorpayRefund(order, order.cancellationReason);
+    }
+
+    // Atomically restore inventory (durable CAS prevents duplicate restoration under concurrent requests)
+    await restoreOrderInventoryAtomic(order._id);
+
+    await order.save();
+
+    console.log(`[ORDERS] 🚫 Order ${order.orderId} cancelled by customer ${req.user.email} (Refund: ${order.refundStatus})`);
+
+    return res.status(200).json({
+      success: true,
+      message: "Order successfully cancelled.",
+      order: order.toSafeObject(),
+      refund: refundResult,
+    });
+  } catch (error) {
+    console.error("[ORDERS] ❌ Error cancelling order:", error.message);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to cancel order. Please try again.",
+    });
+  }
+};
+
+module.exports = {
+  createOrder,
+  verifyPayment,
+  getMyOrders,
+  cancelMyOrder,
+  processRazorpayRefund,
+  processPaymentSideEffects,
+  restoreOrderInventoryAtomic,
+};

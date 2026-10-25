@@ -152,6 +152,11 @@ const productSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    stock: {
+      type: Number,
+      default: null, // null = untracked inventory, number = tracked quantity
+      min: 0,
+    },
     // ── Commission Model ────────────────────────────────────────────────────
     // Standard sellers (non-Deals): 5% commission per sale
     // Deal Page sellers (Pro subscribers): 0% commission (subscription covers it)

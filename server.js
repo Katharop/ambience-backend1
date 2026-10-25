@@ -838,8 +838,9 @@ app.delete("/api/admin/support-tickets/:id", protect, requireAdmin, async (req, 
 app.post("/api/payment/create-order", paymentLimiter, protect, validateCreateOrder, paymentController.createOrder);
 app.post("/api/payment/verify",       paymentLimiter, protect, validateVerifyPayment, paymentController.verifyPayment);
 
-// ── Order History (protected) ───────────────────────────────────────────────
+// ── Order History & Actions (protected) ────────────────────────────────────
 app.get("/api/orders/my-orders",      protect, paymentController.getMyOrders);
+app.post("/api/orders/:id/cancel",    protect, paymentController.cancelMyOrder);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 4.5: Product Management Routes
@@ -879,7 +880,9 @@ app.get("/api/products", async (req, res) => {
     const products = await Product.find({
       status: "live",
       category: { $nin: ["Deals Page", "deals page"] },
-    }).sort({ createdAt: -1 });
+    })
+      .select('-submittedBy -commissionRate -addedBy -source -webhookEvents -__v')
+      .sort({ createdAt: -1 });
     return res.status(200).json({ success: true, products });
   } catch (error) {
     console.error("[AMBIENCE] ❌ Error fetching products:", error.message);
@@ -917,7 +920,9 @@ app.get('/api/products/deals-live', async (req, res) => {
       status: 'live',
       category: { $in: ['Deals Page', 'deals page'] },
       isApproved: true,
-    }).sort({ createdAt: -1 });
+    })
+      .select('-submittedBy -commissionRate -addedBy -source -webhookEvents -__v')
+      .sort({ createdAt: -1 });
     return res.status(200).json({ success: true, products: dealsProducts });
   } catch (error) {
     console.error('[AMBIENCE] ❌ Error fetching deals-live products:', error.message);
@@ -972,7 +977,8 @@ app.get("/api/products/:id", async (req, res) => {
       return res.status(400).json({ success: false, error: "Invalid product ID format" });
     }
 
-    const product = await Product.findById(req.params.id);
+    const product = await Product.findById(req.params.id)
+      .select('-submittedBy -commissionRate -addedBy -source -webhookEvents -__v');
     if (!product) {
       return res.status(404).json({ success: false, error: "Product not found" });
     }
@@ -1188,6 +1194,12 @@ app.put('/api/products/my-submissions/:id', protect, async (req, res) => {
       }
     }
     if (req.body.retailPrice && !req.body.dealPrice) product.dealPrice = parseFloat(req.body.retailPrice);
+    // SECURITY: If a live product is edited, reset to pending for admin re-approval
+    if (product.status === 'live') {
+      product.status = 'pending';
+      product.isApproved = false;
+      console.log(`[AMBIENCE] ⚠️ Live product "${product.name}" reset to pending after edit by ${email}`);
+    }
     await product.save();
     console.log(`[AMBIENCE] ✅ Creator updated: "${product.name}" by ${email}`);
     return res.status(200).json({ success: true, product, message: 'Product updated successfully' });
@@ -1452,9 +1464,12 @@ app.delete("/api/products/:id/reject", protect, restrictTo("admin"), async (req,
     }
 
     const productName = product.name;
-    await Product.findByIdAndDelete(req.params.id);
+    // SECURITY & AUDIT: Soft-delete by setting status to archived rather than permanent deletion
+    product.status = "archived";
+    product.isApproved = false;
+    await product.save();
 
-    console.log(`[AMBIENCE] ❌ Product rejected: "${productName}"`);
+    console.log(`[AMBIENCE] ❌ Product rejected and archived: "${productName}"`);
 
     return res.status(200).json({
       success: true,
@@ -1515,23 +1530,30 @@ app.put("/api/flagship", protect, requireAdmin, async (req, res) => {
 });
 
 // ─── Pro Plan Subscription ─────────────────────────────────────────────────
-app.post('/api/subscription/pro/activate', protect, async (req, res) => {
+app.post('/api/subscription/pro/activate', protect, restrictTo('admin'), async (req, res) => {
+  // SECURITY: Only admins can manually activate Pro subscriptions.
+  // For user self-activation, a verified Razorpay payment webhook should be used instead.
   try {
+    const { userId, razorpaySubId, plan, durationDays } = req.body;
+    if (!userId) return res.status(400).json({ message: 'userId is required' });
+
     const User = require('./models/User');
-    const user = await User.findById(req.user._id);
+    const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     const now = new Date();
+    const days = Number(durationDays) > 0 ? Number(durationDays) : 30;
     user.proSubscription = {
       isActive: true,
-      plan: 'monthly',
+      plan: plan || 'monthly',
       priceINR: 4999,
       subscribedAt: now,
-      expiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
-      razorpaySubId: req.body.razorpaySubId || null,
+      expiresAt: new Date(now.getTime() + days * 24 * 60 * 60 * 1000),
+      razorpaySubId: razorpaySubId || null,
     };
     await user.save({ validateBeforeSave: false });
 
+    console.log(`[AMBIENCE] ✅ Admin ${req.user.email} activated Pro for user ${userId}`);
     res.json({
       message: 'Pro Plan activated successfully',
       proSubscription: user.proSubscription,
@@ -1688,6 +1710,7 @@ app.get("/api/health", (req, res) => {
     status: "ok",
     service: "AMBIENCE Authentication & Service Engine v3.0",
     database: dbStates[mongoose.connection.readyState] || "unknown",
+    emailService: isEmailConfigured() ? "configured (Gmail REST API)" : "dev-mode",
     smtp: isEmailConfigured() ? "configured" : "dev-mode",
     timestamp: new Date().toISOString(),
   });
@@ -1718,8 +1741,44 @@ app.get('/api/admin/stats', protect, requireAdmin, async (req, res) => {
     const recentProds = await Product.countDocuments({ createdAt: { $gte: thirtyDaysAgo }, status: 'live' });
     const prevProds = await Product.countDocuments({ createdAt: { $gte: sixtyDaysAgo, $lt: thirtyDaysAgo }, status: 'live' });
     const productGrowth = prevProds > 0 ? ((recentProds - prevProds) / prevProds * 100).toFixed(1) : recentProds > 0 ? '100.0' : '0.0';
+
+    // 12-Month revenue trend aggregation
+    const monthlyRevenue = await Order.aggregate([
+      { $match: { paymentStatus: 'Success' } },
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
+          revenue: { $sum: '$totalAmount' },
+          orders: { $sum: 1 }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ]);
+
+    // Live catalog category distribution
+    const categoryDistribution = await Product.aggregate([
+      { $match: { status: 'live' } },
+      { $group: { _id: '$category', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 8 }
+    ]);
+
     console.log(`[AMBIENCE] ✅ Admin stats fetched by ${req.user?.email}`);
-    return res.status(200).json({ success: true, stats: { totalRevenue, totalOrders, liveProducts, pendingProducts, totalProducts, productGrowth, ordersByStatus: ordersByStatus.reduce((a, i) => { a[i._id] = i.count; return a; }, {}), recentOrders } });
+    return res.status(200).json({
+      success: true,
+      stats: {
+        totalRevenue,
+        totalOrders,
+        liveProducts,
+        pendingProducts,
+        totalProducts,
+        productGrowth,
+        ordersByStatus: ordersByStatus.reduce((a, i) => { a[i._id] = i.count; return a; }, {}),
+        recentOrders,
+        monthlyRevenue,
+        categoryDistribution,
+      }
+    });
   } catch (error) {
     console.error('[AMBIENCE] ❌ Error fetching admin stats:', error.message);
     return res.status(500).json({ success: false, error: 'Failed to fetch admin stats' });
@@ -1753,13 +1812,93 @@ app.put('/api/admin/orders/:id/status', protect, requireAdmin, async (req, res) 
     if (!valid.includes(status)) return res.status(400).json({ success: false, error: `Invalid status. Must be: ${valid.join(', ')}` });
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+
+    // Enforce valid status transitions - prevent illogical state changes
+    const VALID_TRANSITIONS = {
+      'Confirmed':        ['Processing', 'Shipped', 'Cancelled'],
+      'Processing':       ['Shipped', 'Cancelled'],
+      'Shipped':          ['Out for Delivery', 'Delivered', 'Cancelled'],
+      'Out for Delivery': ['Delivered', 'Cancelled'],
+      'Delivered':        [],  // Terminal state
+      'Cancelled':        [],  // Terminal state
+    };
+    const allowed = VALID_TRANSITIONS[order.orderStatus] || [];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot change from "' + order.orderStatus + '" to "' + status + '". Allowed: ' + (allowed.length > 0 ? allowed.join(', ') : 'none (terminal state)'),
+      });
+    }
     order.orderStatus = status;
+    if (status === 'Cancelled') {
+      order.cancelledAt = new Date();
+      order.cancellationReason = req.body.reason || `Cancelled by admin (${req.user?.email || 'admin'})`;
+      if (order.paymentStatus === 'Success') {
+        await paymentController.processRazorpayRefund(order, order.cancellationReason);
+      }
+      // Atomically restore inventory (durable CAS prevents duplicate restoration)
+      await paymentController.restoreOrderInventoryAtomic(order._id);
+    }
     await order.save();
     console.log(`[AMBIENCE] ✅ Order ${order.orderId} status → ${status} by ${req.user?.email}`);
     return res.status(200).json({ success: true, order, message: `Order status updated to ${status}` });
   } catch (error) {
     console.error('[AMBIENCE] ❌ Error updating order status:', error.message);
     return res.status(500).json({ success: false, error: 'Failed to update order status' });
+  }
+});
+
+// ── Admin: Issue / Retry Razorpay Refund (PROTECTED) ───────────────────────
+app.post('/api/admin/orders/:id/refund', protect, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    const order = mongoose.Types.ObjectId.isValid(id)
+      ? await Order.findById(id)
+      : await Order.findOne({ orderId: id });
+
+    if (!order) {
+      return res.status(404).json({ success: false, error: 'Order not found.' });
+    }
+
+    if (order.paymentStatus !== 'Success') {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot refund order with payment status: ${order.paymentStatus}`,
+      });
+    }
+
+    if (order.refundStatus === 'Processed') {
+      return res.status(400).json({
+        success: false,
+        error: `Refund already processed (Refund ID: ${order.refundId}).`,
+      });
+    }
+
+    const refundReason = reason || `Admin refund by ${req.user.email}`;
+    const refundResult = await paymentController.processRazorpayRefund(order, refundReason);
+
+    // Cancel order and restore inventory if not already cancelled
+    if (order.orderStatus !== 'Cancelled') {
+      order.orderStatus = 'Cancelled';
+      order.cancelledAt = new Date();
+      order.cancellationReason = refundReason;
+      await paymentController.restoreOrderInventoryAtomic(order._id);
+    }
+
+    await order.save();
+
+    console.log(`[REFUND] ✅ Admin ${req.user.email} executed refund on order ${order.orderId}: status=${order.refundStatus}`);
+    return res.status(200).json({
+      success: true,
+      message: `Refund ${order.refundStatus.toLowerCase()} successfully.`,
+      order: order.toSafeObject(),
+      refund: refundResult,
+    });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Admin refund error:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to process refund: ' + error.message });
   }
 });
 
@@ -1772,7 +1911,7 @@ app.get('/api/orders/:orderId/invoice', protect, async (req, res) => {
     if (!isOwner && !isAdmin) return res.status(403).json({ success: false, error: 'Not authorized' });
     if (!order.invoiceNumber && order.paymentStatus === 'Success') {
       const d = new Date().toISOString().slice(0,10).replace(/-/g,'');
-      order.invoiceNumber = `AMB-${d}-${Math.random().toString(36).substring(2,7).toUpperCase()}`;
+      order.invoiceNumber = `AMB-${d}-${require('crypto').randomBytes(4).toString('hex').toUpperCase()}`;
       order.invoiceDate = new Date();
       await order.save();
     }
@@ -1861,7 +2000,7 @@ const startServer = async () => {
     console.log(`  🖼️   Assets:     ${SERVER_URL}/assets/`);
     console.log(`  💚  Health:     ${SERVER_URL}/api/health`);
     console.log(`  💳  Razorpay:   ${process.env.RAZORPAY_KEY_ID ? "Configured ✓" : "⚠️  Not configured"}`);
-    console.log(`  📧  SMTP:       ${isEmailConfigured() ? "Gmail (" + GMAIL_USER + ")" : "⚠️  Not configured (dev mode)"}`);
+    console.log(`  📧  Email API:  ${isEmailConfigured() ? "Gmail REST API (" + GMAIL_USER + ")" : "⚠️  Not configured (dev mode)"}`);
     console.log("══════════════════════════════════════════════════════════");
     console.log("");
   });

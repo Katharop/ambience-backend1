@@ -17,7 +17,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const crypto = require("crypto");
+const mongoose = require("mongoose");
 const Order = require("../models/Order");
+const Product = require("../models/Product");
+const { processPaymentSideEffects, restoreOrderInventoryAtomic } = require("./paymentController");
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // POST /api/payment/webhook
@@ -104,6 +107,15 @@ const handleWebhook = async (req, res) => {
         await handlePaymentFailure(event, payloadData);
         break;
 
+      case "refund.processed":
+      case "refund.created":
+        await handleRefundProcessed(event, payloadData);
+        break;
+
+      case "refund.failed":
+        await handleRefundFailed(event, payloadData);
+        break;
+
       default:
         console.log(`[WEBHOOK] ℹ️ Unhandled event type: ${event} — acknowledged`);
     }
@@ -178,6 +190,9 @@ const handlePaymentSuccess = async (event, payloadData) => {
       `Amount: ₹${amountPaise / 100} | ` +
       `User: ${updatedOrder.userEmail}`
     );
+
+    // Idempotent side-effects execution with oversell protection
+    await processPaymentSideEffects(updatedOrder);
   } else {
     // Order not found OR already processed (idempotent — this is OK)
     const existingOrder = await Order.findOne({ razorpay_order_id: razorpayOrderId });
@@ -185,8 +200,15 @@ const handlePaymentSuccess = async (event, payloadData) => {
       // Duplicate webhook — log and record the event
       console.log(
         `[WEBHOOK] ℹ️ Duplicate ${event} for already-paid order: ${existingOrder.orderId} | ` +
-        `Payment: ${razorpayPaymentId} — skipping`
+        `Payment: ${razorpayPaymentId} — verifying side-effects`
       );
+
+      // CRASH RECOVERY: If server crashed before completing side effects, recover them now!
+      if (!existingOrder.inventoryDecremented || !existingOrder.confirmationEmailSent) {
+        console.log(`[WEBHOOK] 🔄 Recovering pending side-effects via webhook for order: ${existingOrder.orderId}`);
+        await processPaymentSideEffects(existingOrder);
+      }
+
       // Still record the duplicate event for audit
       await Order.updateOne(
         { _id: existingOrder._id },
@@ -272,6 +294,126 @@ const handlePaymentFailure = async (event, payloadData) => {
     );
   } else {
     console.log(`[WEBHOOK] ℹ️ ${event} for already-processed order: ${razorpayOrderId} — skipping`);
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Handler: refund.processed / refund.created
+//
+// Records refund details and marks the order's refundStatus as "Processed".
+// ═══════════════════════════════════════════════════════════════════════════════
+const handleRefundProcessed = async (event, payloadData) => {
+  const refund = payloadData?.refund?.entity;
+  if (!refund) {
+    console.warn(`[WEBHOOK] ⚠️ ${event} — missing refund entity in payload`);
+    return;
+  }
+
+  const refundId = refund.id;
+  const paymentId = refund.payment_id;
+  const orderId = refund.notes?.orderId;
+  const amount = refund.amount;
+
+  const orConditions = [];
+  if (paymentId) orConditions.push({ razorpay_payment_id: paymentId });
+  if (refundId) orConditions.push({ refundId: refundId });
+  if (orderId) orConditions.push({ orderId: orderId });
+
+  if (orConditions.length === 0) {
+    console.warn(`[WEBHOOK] ⚠️ ${event} — cannot correlate refund without payment_id, refundId, or notes.orderId`);
+    return;
+  }
+
+  const payloadHash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(payloadData))
+    .digest("hex")
+    .substring(0, 16);
+
+  const updatedOrder = await Order.findOneAndUpdate(
+    { $or: orConditions },
+    {
+      $set: {
+        refundId: refundId,
+        refundStatus: "Processed",
+        refundAmount: amount,
+        orderStatus: "Cancelled",
+        cancelledAt: new Date(),
+      },
+      $push: {
+        webhookEvents: {
+          event,
+          timestamp: new Date(),
+          payloadHash,
+        },
+      },
+    },
+    { new: true }
+  );
+
+  if (updatedOrder) {
+    console.log(
+      `[WEBHOOK] ✅ Refund PROCESSED via webhook: ${updatedOrder.orderId} | ` +
+      `Refund: ${refundId} | Amount: ${amount} paise`
+    );
+
+    // Atomically restore inventory (durable CAS prevents duplicate restoration)
+    await restoreOrderInventoryAtomic(updatedOrder._id);
+  } else {
+    console.warn(`[WEBHOOK] ⚠️ ${event} — order not found for refund: ${refundId} / payment: ${paymentId}`);
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Handler: refund.failed
+//
+// Records refund failure error on the order.
+// ═══════════════════════════════════════════════════════════════════════════════
+const handleRefundFailed = async (event, payloadData) => {
+  const refund = payloadData?.refund?.entity;
+  if (!refund) return;
+
+  const refundId = refund.id;
+  const paymentId = refund.payment_id;
+  const orderId = refund.notes?.orderId;
+  const errorDescription = refund.error_description || "Refund failed on payment gateway";
+
+  const orConditions = [];
+  if (paymentId) orConditions.push({ razorpay_payment_id: paymentId });
+  if (refundId) orConditions.push({ refundId: refundId });
+  if (orderId) orConditions.push({ orderId: orderId });
+
+  if (orConditions.length === 0) return;
+
+  const payloadHash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(payloadData))
+    .digest("hex")
+    .substring(0, 16);
+
+  const updatedOrder = await Order.findOneAndUpdate(
+    { $or: orConditions },
+    {
+      $set: {
+        refundStatus: "Failed",
+        refundError: errorDescription,
+      },
+      $push: {
+        webhookEvents: {
+          event,
+          timestamp: new Date(),
+          payloadHash,
+        },
+      },
+    },
+    { new: true }
+  );
+
+  if (updatedOrder) {
+    console.warn(
+      `[WEBHOOK] ❌ Refund FAILED via webhook: ${updatedOrder.orderId} | ` +
+      `Error: ${errorDescription}`
+    );
   }
 };
 
