@@ -493,6 +493,162 @@ const verifyPayment = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Transactional Email Helpers (Production-Grade & Idempotent)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const sendAdminOrderNotification = async (order) => {
+  if (order.adminNotificationEmailSent) return false;
+  const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL || process.env.GMAIL_USER;
+  if (!adminEmail || !adminEmail.includes("@")) return false;
+
+  try {
+    const { sendEmail } = require("../utils/emailService");
+    const itemsHtml = (order.items || [])
+      .map((i) => `<li>${i.name} × ${i.qty} — ₹${((i.priceINR * i.qty)).toLocaleString("en-IN")}</li>`)
+      .join("");
+    const addr = order.shippingAddress;
+    const addrStr = addr
+      ? `${addr.street ? addr.street + ', ' : ''}${addr.city || ''}, ${addr.state || ''} ${addr.zip || ''}, ${addr.country || 'India'}`
+      : "Not provided";
+
+    await sendEmail({
+      to: adminEmail,
+      subject: `[AMBIENCE OPS] New Paid Order: ${order.orderId} (₹${(order.totalAmount / 100).toLocaleString("en-IN")})`,
+      html: `
+        <h2>New Customer Order Placed</h2>
+        <p><strong>Order ID:</strong> ${order.orderId}</p>
+        <p><strong>Customer Email:</strong> ${order.userEmail}</p>
+        <p><strong>Payment Status:</strong> ${order.paymentStatus} (Razorpay Payment ID: ${order.razorpay_payment_id || 'N/A'})</p>
+        <p><strong>Total Amount:</strong> ₹${(order.totalAmount / 100).toLocaleString("en-IN")}</p>
+        <p><strong>Items:</strong></p>
+        <ul>${itemsHtml}</ul>
+        <p><strong>Shipping Address:</strong><br />${addrStr}</p>
+        <p><a href="${process.env.FRONTEND_URL || "https://ambience-fronten.vercel.app"}/admin">Go to Admin Dashboard</a></p>
+      `,
+      logLabel: "Admin New Order Notification",
+    });
+
+    order.adminNotificationEmailSent = true;
+    await order.save();
+    return true;
+  } catch (err) {
+    console.warn(`[EMAIL] Admin notification note for ${order.orderId}:`, err.message);
+    return false;
+  }
+};
+
+const sendOrderShippingEmail = async (order) => {
+  if (order.shippingEmailSent || !order.userEmail) return false;
+
+  try {
+    const { sendEmail } = require("../utils/emailService");
+    const itemsHtml = (order.items || [])
+      .map((i) => `<li>${i.name} × ${i.qty}</li>`)
+      .join("");
+
+    const trackingHtml = order.trackingNumber
+      ? `<p><strong>Carrier:</strong> ${order.carrier || 'Standard Courier'}<br />
+            <strong>Tracking / AWB Number:</strong> ${order.trackingNumber}<br />
+            ${order.trackingUrl ? `<strong>Tracking Link:</strong> <a href="${order.trackingUrl}" target="_blank" rel="noopener noreferrer">${order.trackingUrl}</a>` : ''}
+         </p>`
+      : `<p>Your parcel has been dispatched via ${order.carrier || 'our courier partner'}. Live status can be viewed in your account.</p>`;
+
+    await sendEmail({
+      to: order.userEmail,
+      subject: `Dispatched: Your Ambience Order ${order.orderId} Is on Its Way!`,
+      html: `
+        <h2>Your Ambience Order Has Shipped!</h2>
+        <p>Great news! Your order <strong>${order.orderId}</strong> has been packaged and handed over to our delivery partner.</p>
+        ${trackingHtml}
+        <h3>Order Items:</h3>
+        <ul>${itemsHtml}</ul>
+        <p>You can track the shipment journey live anytime on your <a href="${process.env.FRONTEND_URL || "https://ambience-fronten.vercel.app"}/orders">My Orders</a> page.</p>
+        <p>Thank you for shopping with Ambience.</p>
+      `,
+      logLabel: "Order Shipping Email",
+    });
+
+    order.shippingEmailSent = true;
+    await order.save();
+    return true;
+  } catch (err) {
+    console.warn(`[EMAIL] Shipping notification note for ${order.orderId}:`, err.message);
+    return false;
+  }
+};
+
+const sendOrderDeliveredEmail = async (order) => {
+  if (order.deliveryEmailSent || !order.userEmail) return false;
+
+  try {
+    const { sendEmail } = require("../utils/emailService");
+    const itemsHtml = (order.items || [])
+      .map((i) => `<li>${i.name} × ${i.qty}</li>`)
+      .join("");
+
+    await sendEmail({
+      to: order.userEmail,
+      subject: `Delivered: Your Ambience Order ${order.orderId}`,
+      html: `
+        <h2>Your Order Has Been Delivered!</h2>
+        <p>Your order <strong>${order.orderId}</strong> has been marked as delivered.</p>
+        <h3>Delivered Items:</h3>
+        <ul>${itemsHtml}</ul>
+        <p>We hope you love your selection! If you need any assistance, reach out via <a href="${process.env.FRONTEND_URL || "https://ambience-fronten.vercel.app"}/account?tab=support">VIP Support</a>.</p>
+        <p>Warm regards,<br />The Ambience Team</p>
+      `,
+      logLabel: "Order Delivered Email",
+    });
+
+    order.deliveryEmailSent = true;
+    await order.save();
+    return true;
+  } catch (err) {
+    console.warn(`[EMAIL] Delivery notification note for ${order.orderId}:`, err.message);
+    return false;
+  }
+};
+
+const sendOrderCancellationEmail = async (order) => {
+  if (order.cancellationEmailSent || !order.userEmail) return false;
+
+  try {
+    const { sendEmail } = require("../utils/emailService");
+    const refundFormatted = (order.refundAmount || order.totalAmount)
+      ? `₹${((order.refundAmount || order.totalAmount) / 100).toLocaleString("en-IN")}`
+      : "₹0";
+
+    const refundText = order.paymentStatus === "Success"
+      ? `<p><strong>Refund Status:</strong> ${order.refundStatus || "Initiated"}<br />
+            <strong>Refund Amount:</strong> ${refundFormatted}<br />
+            ${order.refundId ? `<strong>Refund ID:</strong> ${order.refundId}<br />` : ''}
+            <em>Note: Gateway refunds are processed back to your original payment method within 5–7 business days.</em>
+         </p>`
+      : `<p>Payment was not captured for this order; no charge was incurred.</p>`;
+
+    await sendEmail({
+      to: order.userEmail,
+      subject: `Order Cancelled: ${order.orderId} — Ambience`,
+      html: `
+        <h2>Order Cancellation Notice</h2>
+        <p>Your order <strong>${order.orderId}</strong> has been cancelled.</p>
+        <p><strong>Reason:</strong> ${order.cancellationReason || "Cancellation requested"}</p>
+        ${refundText}
+        <p>If you have any questions, please contact our concierge via your <a href="${process.env.FRONTEND_URL || "https://ambience-fronten.vercel.app"}/account?tab=support">Ambience Account</a>.</p>
+      `,
+      logLabel: "Order Cancellation Email",
+    });
+
+    order.cancellationEmailSent = true;
+    await order.save();
+    return true;
+  } catch (err) {
+    console.warn(`[EMAIL] Cancellation notification note for ${order.orderId}:`, err.message);
+    return false;
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Helper: processPaymentSideEffects
 //
 // Executes or recovers payment confirmation side-effects (inventory decrement & email)
@@ -593,6 +749,11 @@ const processPaymentSideEffects = async (order) => {
     }
   }
 
+  // ── 3. ADMIN NOTIFICATION EMAIL (Idempotent Guard) ────────────────────────
+  if (!order.adminNotificationEmailSent) {
+    await sendAdminOrderNotification(order);
+  }
+
   return { success: true, inventoryUpdated, emailSent };
 };
 
@@ -678,6 +839,9 @@ const getMyOrders = async (req, res) => {
       cancellationReason: order.cancellationReason,
       carrier: order.carrier,
       trackingNumber: order.trackingNumber,
+      trackingUrl: order.trackingUrl,
+      shippedAt: order.shippedAt,
+      deliveredAt: order.deliveredAt,
       paidAt: order.paidAt,
       createdAt: order.createdAt,
     }));
@@ -834,6 +998,9 @@ const cancelMyOrder = async (req, res) => {
 
     await order.save();
 
+    // Send customer cancellation & refund notification email
+    await sendOrderCancellationEmail(order);
+
     console.log(`[ORDERS] 🚫 Order ${order.orderId} cancelled by customer ${req.user.email} (Refund: ${order.refundStatus})`);
 
     return res.status(200).json({
@@ -859,4 +1026,8 @@ module.exports = {
   processRazorpayRefund,
   processPaymentSideEffects,
   restoreOrderInventoryAtomic,
+  sendAdminOrderNotification,
+  sendOrderShippingEmail,
+  sendOrderDeliveredEmail,
+  sendOrderCancellationEmail,
 };

@@ -1924,7 +1924,7 @@ app.get('/api/admin/orders', protect, requireAdmin, async (req, res) => {
 
 app.put('/api/admin/orders/:id/status', protect, requireAdmin, async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, carrier, trackingNumber, trackingUrl, reason } = req.body;
     const valid = ['Confirmed', 'Processing', 'Shipped', 'Out for Delivery', 'Delivered', 'Cancelled'];
     if (!valid.includes(status)) return res.status(400).json({ success: false, error: `Invalid status. Must be: ${valid.join(', ')}` });
     const order = await Order.findById(req.params.id);
@@ -1946,19 +1946,64 @@ app.put('/api/admin/orders/:id/status', protect, requireAdmin, async (req, res) 
         error: 'Cannot change from "' + order.orderStatus + '" to "' + status + '". Allowed: ' + (allowed.length > 0 ? allowed.join(', ') : 'none (terminal state)'),
       });
     }
+
+    // Validate and sanitize tracking URL if supplied
+    let sanitizedTrackingUrl = '';
+    if (trackingUrl !== undefined && trackingUrl !== null && typeof trackingUrl === 'string') {
+      const trimmedUrl = trackingUrl.trim();
+      if (trimmedUrl) {
+        try {
+          const parsed = new URL(trimmedUrl);
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            return res.status(400).json({ success: false, error: 'Tracking URL must use http or https protocol' });
+          }
+          sanitizedTrackingUrl = parsed.href;
+        } catch (urlErr) {
+          return res.status(400).json({ success: false, error: 'Invalid tracking URL format. Must be a valid http or https URL.' });
+        }
+      }
+    }
+
+    // Update shipping fields if provided
+    if (carrier !== undefined && carrier !== null) {
+      order.carrier = String(carrier).trim().substring(0, 100);
+    }
+    if (trackingNumber !== undefined && trackingNumber !== null) {
+      order.trackingNumber = String(trackingNumber).trim().substring(0, 100);
+    }
+    if (sanitizedTrackingUrl) {
+      order.trackingUrl = sanitizedTrackingUrl;
+    }
+
     order.orderStatus = status;
-    if (status === 'Cancelled') {
+
+    if (status === 'Shipped') {
+      order.shippedAt = order.shippedAt || new Date();
+      await order.save();
+      // Send shipping notification email with tracking info
+      await paymentController.sendOrderShippingEmail(order);
+    } else if (status === 'Delivered') {
+      order.deliveredAt = order.deliveredAt || new Date();
+      await order.save();
+      // Send delivery confirmation email
+      await paymentController.sendOrderDeliveredEmail(order);
+    } else if (status === 'Cancelled') {
       order.cancelledAt = new Date();
-      order.cancellationReason = req.body.reason || `Cancelled by admin (${req.user?.email || 'admin'})`;
+      order.cancellationReason = reason || req.body.reason || `Cancelled by admin (${req.user?.email || 'admin'})`;
       if (order.paymentStatus === 'Success') {
         await paymentController.processRazorpayRefund(order, order.cancellationReason);
       }
       // Atomically restore inventory (durable CAS prevents duplicate restoration)
       await paymentController.restoreOrderInventoryAtomic(order._id);
+      await order.save();
+      // Send customer cancellation notification email
+      await paymentController.sendOrderCancellationEmail(order);
+    } else {
+      await order.save();
     }
-    await order.save();
+
     console.log(`[AMBIENCE] ✅ Order ${order.orderId} status → ${status} by ${req.user?.email}`);
-    return res.status(200).json({ success: true, order, message: `Order status updated to ${status}` });
+    return res.status(200).json({ success: true, order: order.toSafeObject(), message: `Order status updated to ${status}` });
   } catch (error) {
     console.error('[AMBIENCE] ❌ Error updating order status:', error.message);
     return res.status(500).json({ success: false, error: 'Failed to update order status' });
@@ -2006,6 +2051,9 @@ app.post('/api/admin/orders/:id/refund', protect, requireAdmin, async (req, res)
 
     await order.save();
 
+    // Send customer cancellation & refund notification email
+    await paymentController.sendOrderCancellationEmail(order);
+
     console.log(`[REFUND] ✅ Admin ${req.user.email} executed refund on order ${order.orderId}: status=${order.refundStatus}`);
     return res.status(200).json({
       success: true,
@@ -2037,10 +2085,31 @@ app.get('/api/orders/:orderId/invoice', protect, async (req, res) => {
       invoiceDate: order.invoiceDate || order.paidAt || order.createdAt,
       orderId: order.orderId,
       customer: { name: order.user?.name || 'Customer', email: order.userEmail || order.user?.email || '', phone: order.user?.phone || '' },
-      items: order.items.map(i => ({ name: i.name, brand: i.brand || '', category: i.category || '', qty: i.qty, price: i.priceINR, total: i.priceINR * i.qty })),
-      subtotal: order.amount, tax: order.taxAmount, total: order.totalAmount,
-      currency: order.currency || 'INR', paymentMethod: 'Razorpay', paymentId: order.razorpay_payment_id || '',
-      shippingAddress: order.shippingAddress, orderStatus: order.orderStatus, paymentStatus: order.paymentStatus
+      items: order.items.map(i => ({
+        name: i.name,
+        brand: i.brand || '',
+        category: i.category || '',
+        qty: i.qty,
+        priceINR: i.priceINR,
+        price: i.priceINR,
+        totalINR: i.priceINR * i.qty,
+        total: i.priceINR * i.qty,
+      })),
+      subtotal: order.amount,
+      tax: order.taxAmount,
+      total: order.totalAmount,
+      subtotalINR: Math.round(order.amount / 100),
+      taxINR: Math.round(order.taxAmount / 100),
+      totalINR: Math.round(order.totalAmount / 100),
+      currency: order.currency || 'INR',
+      paymentMethod: 'Razorpay',
+      paymentId: order.razorpay_payment_id || '',
+      shippingAddress: order.shippingAddress,
+      orderStatus: order.orderStatus,
+      paymentStatus: order.paymentStatus,
+      carrier: order.carrier || '',
+      trackingNumber: order.trackingNumber || '',
+      trackingUrl: order.trackingUrl || '',
     };
     console.log(`[AMBIENCE] ✅ Invoice ${invoice.invoiceNumber} fetched`);
     return res.status(200).json({ success: true, invoice });

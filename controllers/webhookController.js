@@ -20,7 +20,7 @@ const crypto = require("crypto");
 const mongoose = require("mongoose");
 const Order = require("../models/Order");
 const Product = require("../models/Product");
-const { processPaymentSideEffects, restoreOrderInventoryAtomic } = require("./paymentController");
+const { processPaymentSideEffects, restoreOrderInventoryAtomic, sendOrderCancellationEmail } = require("./paymentController");
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // POST /api/payment/webhook
@@ -359,6 +359,11 @@ const handleRefundProcessed = async (event, payloadData) => {
 
     // Atomically restore inventory (durable CAS prevents duplicate restoration)
     await restoreOrderInventoryAtomic(updatedOrder._id);
+
+    // Send customer cancellation/refund email if not yet sent
+    if (!updatedOrder.cancellationEmailSent) {
+      await sendOrderCancellationEmail(updatedOrder);
+    }
   } else {
     console.warn(`[WEBHOOK] ⚠️ ${event} — order not found for refund: ${refundId} / payment: ${paymentId}`);
   }

@@ -214,6 +214,22 @@ const orderSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    adminNotificationEmailSent: {
+      type: Boolean,
+      default: false,
+    },
+    shippingEmailSent: {
+      type: Boolean,
+      default: false,
+    },
+    deliveryEmailSent: {
+      type: Boolean,
+      default: false,
+    },
+    cancellationEmailSent: {
+      type: Boolean,
+      default: false,
+    },
 
     // ── Status Tracking ───────────────────────────────────────────────────
     paymentStatus: {
@@ -259,6 +275,7 @@ const orderSchema = new mongoose.Schema(
     },
     carrier: { type: String, trim: true, default: '' },
     trackingNumber: { type: String, trim: true, default: '' },
+    trackingUrl: { type: String, trim: true, default: '' },
     shippedAt: { type: Date, default: null },
     deliveredAt: { type: Date, default: null },
 
@@ -323,10 +340,15 @@ orderSchema.methods.toSafeObject = function () {
     inventoryDecremented: this.inventoryDecremented,
     inventoryShortfall: this.inventoryShortfall,
     confirmationEmailSent: this.confirmationEmailSent,
+    adminNotificationEmailSent: this.adminNotificationEmailSent,
+    shippingEmailSent: this.shippingEmailSent,
+    deliveryEmailSent: this.deliveryEmailSent,
+    cancellationEmailSent: this.cancellationEmailSent,
     cancellationReason: this.cancellationReason,
     cancelledAt: this.cancelledAt,
     carrier: this.carrier,
     trackingNumber: this.trackingNumber,
+    trackingUrl: this.trackingUrl,
     shippedAt: this.shippedAt,
     deliveredAt: this.deliveredAt,
     paidAt: this.paidAt,
