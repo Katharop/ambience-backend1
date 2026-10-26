@@ -1721,12 +1721,97 @@ app.get("/api/health", (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 app.get('/api/admin/stats', protect, requireAdmin, async (req, res) => {
   try {
+    // Authoritative qualification match for customer sales revenue:
+    // 1. paymentStatus must be 'Success'
+    // 2. Demo / test orders (razorpay_order_id starting with 'demo_') are strictly excluded
+    const paidMatch = {
+      paymentStatus: 'Success',
+      razorpay_order_id: { $not: /^demo_/ },
+    };
+
+    // Gross Sales, Total Refunds, and Net Revenue aggregation
     const revenueResult = await Order.aggregate([
-      { $match: { paymentStatus: 'Success' } },
-      { $group: { _id: null, totalRevenue: { $sum: '$totalAmount' }, orderCount: { $sum: 1 } } }
+      { $match: paidMatch },
+      {
+        $group: {
+          _id: null,
+          // Gross Bookings (all valid paid transactions prior to cancellations)
+          totalBookings: { $sum: '$totalAmount' },
+          totalPaidOrders: { $sum: 1 },
+
+          // Active Gross Revenue (non-cancelled paid customer orders)
+          grossRevenue: {
+            $sum: {
+              $cond: [{ $ne: ['$orderStatus', 'Cancelled'] }, '$totalAmount', 0]
+            }
+          },
+          paidOrdersCount: {
+            $sum: {
+              $cond: [{ $ne: ['$orderStatus', 'Cancelled'] }, 1, 0]
+            }
+          },
+
+          // Confirmed Processed Refunds on Active Orders (only refundStatus === 'Processed')
+          totalRefunded: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ['$orderStatus', 'Cancelled'] },
+                    { $eq: ['$refundStatus', 'Processed'] }
+                  ]
+                },
+                { $ifNull: ['$refundAmount', 0] },
+                0
+              ]
+            }
+          },
+
+          // Cancelled Orders Tracking
+          cancelledRevenue: {
+            $sum: {
+              $cond: [{ $eq: ['$orderStatus', 'Cancelled'] }, '$totalAmount', 0]
+            }
+          },
+          cancelledOrdersCount: {
+            $sum: {
+              $cond: [{ $eq: ['$orderStatus', 'Cancelled'] }, 1, 0]
+            }
+          },
+
+          // Pending / Initiated Refunds (for operator visibility)
+          pendingRefundAmount: {
+            $sum: {
+              $cond: [
+                { $eq: ['$refundStatus', 'Initiated'] },
+                { $ifNull: ['$refundAmount', 0] },
+                0
+              ]
+            }
+          },
+          pendingRefundCount: {
+            $sum: {
+              $cond: [{ $eq: ['$refundStatus', 'Initiated'] }, 1, 0]
+            }
+          }
+        }
+      }
     ]);
-    const totalRevenue = revenueResult[0]?.totalRevenue || 0;
-    const totalOrders = revenueResult[0]?.orderCount || 0;
+
+    const grossRevenue = revenueResult[0]?.grossRevenue || 0;
+    const totalRefunded = revenueResult[0]?.totalRefunded || 0;
+    const netRevenue = Math.max(0, grossRevenue - totalRefunded);
+    const totalRevenue = netRevenue; // backward compatibility
+    const paidOrdersCount = revenueResult[0]?.paidOrdersCount || 0;
+    const cancelledRevenue = revenueResult[0]?.cancelledRevenue || 0;
+    const cancelledOrdersCount = revenueResult[0]?.cancelledOrdersCount || 0;
+    const totalBookings = revenueResult[0]?.totalBookings || 0;
+    const pendingRefundAmount = revenueResult[0]?.pendingRefundAmount || 0;
+    const pendingRefundCount = revenueResult[0]?.pendingRefundCount || 0;
+
+    // Actual total order count across all statuses
+    const totalOrders = await Order.countDocuments({});
+
     const liveProducts = await Product.countDocuments({ status: 'live' });
     const pendingProducts = await Product.countDocuments({ status: 'pending' });
     const totalProducts = await Product.countDocuments({});
@@ -1734,7 +1819,7 @@ app.get('/api/admin/stats', protect, requireAdmin, async (req, res) => {
       { $group: { _id: '$orderStatus', count: { $sum: 1 } } }
     ]);
     const recentOrders = await Order.find().sort({ createdAt: -1 }).limit(20)
-      .select('orderId userEmail items amount totalAmount orderStatus paymentStatus shippingAddress createdAt invoiceNumber');
+      .select('orderId userEmail items amount totalAmount orderStatus paymentStatus refundStatus refundAmount shippingAddress createdAt invoiceNumber');
     const now = new Date();
     const thirtyDaysAgo = new Date(now - 30*24*60*60*1000);
     const sixtyDaysAgo = new Date(now - 60*24*60*60*1000);
@@ -1742,20 +1827,43 @@ app.get('/api/admin/stats', protect, requireAdmin, async (req, res) => {
     const prevProds = await Product.countDocuments({ createdAt: { $gte: sixtyDaysAgo, $lt: thirtyDaysAgo }, status: 'live' });
     const productGrowth = prevProds > 0 ? ((recentProds - prevProds) / prevProds * 100).toFixed(1) : recentProds > 0 ? '100.0' : '0.0';
 
-    // 12-Month revenue trend aggregation
+    // 12-Month revenue trend aggregation (only authentic, non-cancelled paid orders)
     const monthlyRevenue = await Order.aggregate([
-      { $match: { paymentStatus: 'Success' } },
+      {
+        $match: {
+          ...paidMatch,
+          orderStatus: { $ne: 'Cancelled' }
+        }
+      },
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
-          revenue: { $sum: '$totalAmount' },
+          grossRevenue: { $sum: '$totalAmount' },
+          refunds: {
+            $sum: {
+              $cond: [
+                { $eq: ['$refundStatus', 'Processed'] },
+                { $ifNull: ['$refundAmount', 0] },
+                0
+              ]
+            }
+          },
           orders: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          _id: 1,
+          grossRevenue: 1,
+          refunds: 1,
+          orders: 1,
+          revenue: { $subtract: ['$grossRevenue', '$refunds'] }
         }
       },
       { $sort: { _id: 1 } }
     ]);
 
-    // Live catalog category distribution
+    // Live catalog category distribution (completely independent from sales orders)
     const categoryDistribution = await Product.aggregate([
       { $match: { status: 'live' } },
       { $group: { _id: '$category', count: { $sum: 1 } } },
@@ -1763,12 +1871,21 @@ app.get('/api/admin/stats', protect, requireAdmin, async (req, res) => {
       { $limit: 8 }
     ]);
 
-    console.log(`[AMBIENCE] ✅ Admin stats fetched by ${req.user?.email}`);
+    console.log(`[AMBIENCE] ✅ Admin stats fetched by ${req.user?.email} (Net Rev: ₹${Math.round(netRevenue/100)}, Paid Orders: ${paidOrdersCount}, Total Orders: ${totalOrders})`);
     return res.status(200).json({
       success: true,
       stats: {
         totalRevenue,
+        grossRevenue,
+        netRevenue,
+        totalRefunded,
+        paidOrdersCount,
         totalOrders,
+        cancelledRevenue,
+        cancelledOrdersCount,
+        totalBookings,
+        pendingRefundAmount,
+        pendingRefundCount,
         liveProducts,
         pendingProducts,
         totalProducts,
