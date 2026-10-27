@@ -812,44 +812,92 @@ const restoreOrderInventoryAtomic = async (orderId) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // GET /api/orders/my-orders
 //
-// Returns all orders for the authenticated user, sorted by newest first.
+// Returns all authentic orders for the authenticated user, sorted by newest first.
+// Demo / test orders are strictly excluded in production and by default in development
+// unless explicitly requested via ?includeDemo=true in non-production environments.
+// Historical order items, pricing snapshots, and invoice data are preserved even if
+// products have since been removed or updated in the catalog.
 // ═══════════════════════════════════════════════════════════════════════════════
 const getMyOrders = async (req, res) => {
   try {
-    const orders = await Order.find({ user: req.user._id })
+    const isProd = IS_PRODUCTION || process.env.NODE_ENV === "production";
+    const allowDemo = !isProd && req.query.includeDemo === "true";
+
+    const filter = { user: req.user._id };
+
+    // Strictly exclude demo/test orders from real customer order history across all demo markers
+    if (!allowDemo) {
+      filter.$and = [
+        { razorpay_order_id: { $not: /^demo_/ } },
+        {
+          $or: [
+            { razorpay_payment_id: null },
+            { razorpay_payment_id: { $not: /^demo_/ } },
+          ],
+        },
+        { razorpay_signature: { $ne: "demo_signature" } },
+      ];
+    }
+
+    const orders = await Order.find(filter)
       .sort({ createdAt: -1 })
       .lean();
 
-    const safeOrders = orders.map((order) => ({
-      _id: order._id,
-      orderId: order.orderId,
-      items: order.items,
-      amount: order.amount,
-      taxAmount: order.taxAmount,
-      totalAmount: order.totalAmount,
-      currency: order.currency,
-      paymentStatus: order.paymentStatus,
-      orderStatus: order.orderStatus,
-      shippingAddress: order.shippingAddress,
-      razorpay_order_id: order.razorpay_order_id,
-      razorpay_payment_id: order.razorpay_payment_id,
-      refundStatus: order.refundStatus,
-      refundAmount: order.refundAmount,
-      refundId: order.refundId,
-      cancellationReason: order.cancellationReason,
-      carrier: order.carrier,
-      trackingNumber: order.trackingNumber,
-      trackingUrl: order.trackingUrl,
-      shippedAt: order.shippedAt,
-      deliveredAt: order.deliveredAt,
-      paidAt: order.paidAt,
-      createdAt: order.createdAt,
-    }));
+    const safeOrders = orders.map((order) => {
+      const isDemo = Boolean(
+        (typeof order.razorpay_order_id === "string" && order.razorpay_order_id.startsWith("demo_")) ||
+        (typeof order.razorpay_payment_id === "string" && order.razorpay_payment_id.startsWith("demo_")) ||
+        order.razorpay_signature === "demo_signature"
+      );
+
+      // Preserve full fidelity of historical purchased items even if removed from the catalog
+      const items = (order.items || []).map((item) => ({
+        productId: item.productId,
+        name: item.name || "Purchased Product",
+        brand: item.brand || "",
+        category: item.category || "",
+        priceINR: Number(item.priceINR ?? item.price ?? 0),
+        qty: Number(item.qty || 1),
+        imageUrl: item.imageUrl || item.image || "",
+      }));
+
+      return {
+        _id: order._id,
+        orderId: order.orderId,
+        items,
+        amount: order.amount,
+        taxAmount: order.taxAmount,
+        totalAmount: order.totalAmount,
+        currency: order.currency || "INR",
+        paymentStatus: order.paymentStatus || "Pending",
+        orderStatus: order.orderStatus || "Confirmed",
+        shippingAddress: order.shippingAddress || null,
+        razorpay_order_id: order.razorpay_order_id,
+        razorpay_payment_id: order.razorpay_payment_id,
+        refundStatus: order.refundStatus || "None",
+        refundAmount: order.refundAmount || 0,
+        refundId: order.refundId || null,
+        cancellationReason: order.cancellationReason || null,
+        carrier: order.carrier || "",
+        trackingNumber: order.trackingNumber || "",
+        trackingUrl: order.trackingUrl || "",
+        shippedAt: order.shippedAt || null,
+        deliveredAt: order.deliveredAt || null,
+        paidAt: order.paidAt || null,
+        createdAt: order.createdAt,
+        invoiceNumber: order.invoiceNumber || null,
+        invoiceDate: order.invoiceDate || null,
+        isDemo,
+      };
+    });
+
+    // Defense-in-depth: guarantee no demo order reaches customer in production/default view
+    const visibleOrders = allowDemo ? safeOrders : safeOrders.filter((order) => !order.isDemo);
 
     return res.status(200).json({
       success: true,
-      orders: safeOrders,
-      count: safeOrders.length,
+      orders: visibleOrders,
+      count: visibleOrders.length,
     });
   } catch (error) {
     console.error("[ORDERS] ❌ Error fetching orders:", error.message);
