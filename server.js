@@ -365,7 +365,15 @@ const paymentLimiter = rateLimit({
   max: 5, // Tightened: 5 payment attempts per 15 minutes
   standardHeaders: true,
   legacyHeaders: false,
-  message: { success: false, error: "Too many payment requests. Please try again after 15 minutes." },
+  statusCode: 429,
+  message: {
+    success: false,
+    error: "Too many payment requests. Please try again after 15 minutes.",
+    code: "RATE_LIMITED",
+  },
+  handler: (req, res, _next, options) => {
+    res.status(options.statusCode).json(options.message);
+  },
 });
 
 const subscriptionLimiter = rateLimit({

@@ -31,8 +31,17 @@ const Product = require("../models/Product");
 // Reads credentials from environment variables.
 // NEVER hardcode keys — they live in .env only.
 // ═══════════════════════════════════════════════════════════════════════════════
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
+const sanitizeEnv = (val) => {
+  if (!val || typeof val !== "string") return "";
+  let clean = val.trim();
+  if ((clean.startsWith('"') && clean.endsWith('"')) || (clean.startsWith("'") && clean.endsWith("'"))) {
+    clean = clean.slice(1, -1).trim();
+  }
+  return clean;
+};
+
+const RAZORPAY_KEY_ID = sanitizeEnv(process.env.RAZORPAY_KEY_ID);
+const RAZORPAY_KEY_SECRET = sanitizeEnv(process.env.RAZORPAY_KEY_SECRET);
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
 let razorpayInstance = null;
@@ -63,11 +72,11 @@ if (RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) {
 const createOrder = async (req, res) => {
   try {
     // ── Check Demo Mode vs Real Razorpay ────────────────────────────────────
-    const isDemoMode = !razorpayInstance;
+    const isDemoMode = !razorpayInstance || !RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET;
 
     // ── SECURITY: Block demo mode in production ─────────────────────────────
     if (isDemoMode && IS_PRODUCTION) {
-      console.error("[PAYMENT] ⛔ Demo mode blocked in production");
+      console.error("[PAYMENT] ⛔ Demo mode blocked in production: Razorpay credentials not configured");
       return res.status(503).json({
         success: false,
         error: "Payment gateway is not configured. Please contact support.",
@@ -275,14 +284,22 @@ const createOrder = async (req, res) => {
       orderId: order.orderId,
     });
   } catch (error) {
-    console.error("[PAYMENT] ❌ Error creating order:", error.message);
+    const errorDetail = error?.error?.description || error?.message || (typeof error === "string" ? error : "Unknown error");
+    console.error(`[PAYMENT] ❌ Error creating order: ${errorDetail}`);
 
-    // Razorpay API errors
-    if (error.statusCode) {
+    // Razorpay API errors with status code
+    if (error && error.statusCode) {
+      const clientMessage = (error.statusCode === 401 || error.statusCode === 403)
+        ? "Payment gateway authentication failed. Please contact support."
+        : "Payment gateway error. Please try again.";
+      const clientCode = (error.statusCode === 401 || error.statusCode === 403)
+        ? "GATEWAY_AUTH_ERROR"
+        : "RAZORPAY_ERROR";
+
       return res.status(error.statusCode).json({
         success: false,
-        error: "Payment gateway error. Please try again.",
-        code: "RAZORPAY_ERROR",
+        error: clientMessage,
+        code: clientCode,
       });
     }
 
