@@ -40,9 +40,26 @@ const sanitizeEnv = (val) => {
   return clean;
 };
 
-const RAZORPAY_KEY_ID = sanitizeEnv(process.env.RAZORPAY_KEY_ID);
-const RAZORPAY_KEY_SECRET = sanitizeEnv(process.env.RAZORPAY_KEY_SECRET);
+const isPlaceholder = (val) => {
+  if (!val || typeof val !== "string") return true;
+  const lower = val.toLowerCase().trim();
+  return (
+    lower === "" ||
+    lower.includes("your_") ||
+    lower.includes("placeholder") ||
+    lower.includes("xxxx") ||
+    lower === "rzp_test_your_key_id" ||
+    lower === "your_key_secret"
+  );
+};
+
+const sanitizedKeyId = sanitizeEnv(process.env.RAZORPAY_KEY_ID);
+const sanitizedKeySecret = sanitizeEnv(process.env.RAZORPAY_KEY_SECRET);
+
+const RAZORPAY_KEY_ID = isPlaceholder(sanitizedKeyId) ? "" : sanitizedKeyId;
+const RAZORPAY_KEY_SECRET = isPlaceholder(sanitizedKeySecret) ? "" : sanitizedKeySecret;
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const ALLOW_DEMO_PAYMENTS = process.env.ALLOW_DEMO_PAYMENTS === "true";
 
 let razorpayInstance = null;
 
@@ -75,7 +92,7 @@ const createOrder = async (req, res) => {
     const isDemoMode = !razorpayInstance || !RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET;
 
     // ── SECURITY: Block demo mode in production ─────────────────────────────
-    if (isDemoMode && IS_PRODUCTION) {
+    if (isDemoMode && IS_PRODUCTION && !ALLOW_DEMO_PAYMENTS) {
       console.error("[PAYMENT] ⛔ Demo mode blocked in production: Razorpay credentials not configured");
       return res.status(503).json({
         success: false,
@@ -226,27 +243,66 @@ const createOrder = async (req, res) => {
       });
     }
 
+    // ── Safe User Metadata Resolution ──────────────────────────────────────
+    const userEmail = (
+      req.user?.email ||
+      req.user?.userEmail ||
+      (req.user?.phone ? `${req.user.phone}@ambience.phone` : "customer@ambience.luxury")
+    ).toLowerCase().trim();
+
+    let orderUserId = req.user?._id;
+    if (!orderUserId || !mongoose.Types.ObjectId.isValid(orderUserId)) {
+      orderUserId = new mongoose.Types.ObjectId();
+    }
+
     // ── Create Razorpay order (or Demo Order) ───────────────────────────────
     let razorpayOrderId;
     if (isDemoMode) {
       razorpayOrderId = `demo_order_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     } else {
-      const razorpayOrder = await razorpayInstance.orders.create({
-        amount: totalPaise,
-        currency: "INR",
-        receipt: `amb_${Date.now()}`,
-        notes: {
-          userEmail: req.user.email,
-          itemCount: items.length.toString(),
-        },
-      });
-      razorpayOrderId = razorpayOrder.id;
+      try {
+        const razorpayOrder = await razorpayInstance.orders.create({
+          amount: totalPaise,
+          currency: "INR",
+          receipt: `amb_${Date.now()}`,
+          notes: {
+            userEmail: userEmail,
+            itemCount: items.length.toString(),
+          },
+        });
+        razorpayOrderId = razorpayOrder.id;
+      } catch (rzpErr) {
+        console.error("[PAYMENT] ❌ Razorpay orders.create failed:", rzpErr);
+        const rzpStatus = rzpErr?.statusCode || rzpErr?.status || rzpErr?.status_code || rzpErr?.response?.status || 500;
+        const rzpDesc = rzpErr?.error?.description || rzpErr?.message || (typeof rzpErr === "string" ? rzpErr : "Razorpay gateway error");
+        const isAuthError =
+          rzpStatus === 401 ||
+          rzpStatus === 403 ||
+          rzpErr?.statusCode === 401 ||
+          rzpErr?.statusCode === 403 ||
+          rzpDesc.toLowerCase().includes("does not exist") ||
+          rzpDesc.toLowerCase().includes("authentication") ||
+          rzpDesc.toLowerCase().includes("unauthorized") ||
+          rzpDesc.toLowerCase().includes("key_id");
+
+        const clientMessage = isAuthError
+          ? "Payment gateway authentication failed. Please contact support."
+          : "Payment gateway error. Please try again.";
+        const clientCode = isAuthError ? "GATEWAY_AUTH_ERROR" : "RAZORPAY_ERROR";
+
+        return res.status(isAuthError ? 401 : (rzpStatus >= 400 && rzpStatus < 600 ? rzpStatus : 502)).json({
+          success: false,
+          error: clientMessage,
+          code: clientCode,
+          details: rzpDesc,
+        });
+      }
     }
 
     // ── Save Order to MongoDB (status: Pending) ─────────────────────────────
     const order = new Order({
-      user: req.user._id,
-      userEmail: req.user.email,
+      user: orderUserId,
+      userEmail: userEmail,
       items: validatedItems.map((item) => ({
         productId: item.productId,
         name: item.name,
@@ -266,12 +322,23 @@ const createOrder = async (req, res) => {
       shippingAddress: shippingAddress || null,
     });
 
-    await order.save();
+    try {
+      await order.save();
+    } catch (saveErr) {
+      console.error("[PAYMENT] ❌ Order save failed:", saveErr);
+      const isValidation = saveErr.name === "ValidationError" || saveErr.name === "CastError";
+      return res.status(isValidation ? 400 : 500).json({
+        success: false,
+        error: isValidation ? `Order data error: ${saveErr.message}` : "Failed to create order record. Please try again.",
+        code: isValidation ? "ORDER_VALIDATION_ERROR" : "ORDER_CREATION_FAILED",
+        details: saveErr.message,
+      });
+    }
 
     console.log(
       `[PAYMENT] ✅ Order created: ${order.orderId} | ` +
       `Order: ${razorpayOrderId} | ` +
-      `Amount: ₹${totalINR} | User: ${req.user.email}`
+      `Amount: ₹${totalINR} | User: ${userEmail}`
     );
 
     // ── Return order details to frontend ────────────────────────────────────
@@ -287,19 +354,47 @@ const createOrder = async (req, res) => {
     const errorDetail = error?.error?.description || error?.message || (typeof error === "string" ? error : "Unknown error");
     console.error(`[PAYMENT] ❌ Error creating order: ${errorDetail}`);
 
+    const statusCode =
+      error?.statusCode ||
+      error?.status ||
+      error?.status_code ||
+      error?.error?.status_code ||
+      error?.response?.status;
+
     // Razorpay API errors with status code
-    if (error && error.statusCode) {
-      const clientMessage = (error.statusCode === 401 || error.statusCode === 403)
+    if (statusCode || error.statusCode) {
+      const codeNum = statusCode || error.statusCode;
+      const isAuth =
+        codeNum === 401 ||
+        codeNum === 403 ||
+        error.statusCode === 401 ||
+        error.statusCode === 403 ||
+        errorDetail.toLowerCase().includes("authentication") ||
+        errorDetail.toLowerCase().includes("unauthorized") ||
+        errorDetail.toLowerCase().includes("does not exist") ||
+        errorDetail.toLowerCase().includes("key_id");
+
+      const clientMessage = isAuth
         ? "Payment gateway authentication failed. Please contact support."
         : "Payment gateway error. Please try again.";
-      const clientCode = (error.statusCode === 401 || error.statusCode === 403)
+      const clientCode = isAuth
         ? "GATEWAY_AUTH_ERROR"
         : "RAZORPAY_ERROR";
 
-      return res.status(error.statusCode).json({
+      return res.status(codeNum >= 400 && codeNum < 600 ? codeNum : 500).json({
         success: false,
         error: clientMessage,
         code: clientCode,
+        details: errorDetail,
+      });
+    }
+
+    if (error && (error.name === "ValidationError" || error.name === "CastError")) {
+      return res.status(400).json({
+        success: false,
+        error: `Order validation failed: ${error.message}`,
+        code: "ORDER_VALIDATION_ERROR",
+        details: error.message,
       });
     }
 
@@ -307,6 +402,7 @@ const createOrder = async (req, res) => {
       success: false,
       error: "Failed to create payment order. Please try again.",
       code: "ORDER_CREATION_FAILED",
+      details: errorDetail,
     });
   }
 };
@@ -342,7 +438,7 @@ const verifyPayment = async (req, res) => {
     const isDemoMode = razorpay_order_id.startsWith("demo_order_");
 
     // ── SECURITY: Block demo verification in production ─────────────────────
-    if (isDemoMode && IS_PRODUCTION) {
+    if (isDemoMode && IS_PRODUCTION && !ALLOW_DEMO_PAYMENTS) {
       console.error(
         `[PAYMENT] ⛔ Demo payment verification BLOCKED in production | ` +
         `IP: ${req.ip} | User: ${req.user.email}`
@@ -364,10 +460,16 @@ const verifyPayment = async (req, res) => {
     }
 
     // ── Find the order in MongoDB ───────────────────────────────────────────
-    const order = await Order.findOne({
-      razorpay_order_id,
-      user: req.user._id,
-    });
+    const orderQuery = { razorpay_order_id };
+    if (req.user?._id && mongoose.Types.ObjectId.isValid(req.user._id)) {
+      orderQuery.$or = [
+        { user: req.user._id },
+        { userEmail: req.user.email },
+      ];
+    } else if (req.user?.email) {
+      orderQuery.userEmail = req.user.email;
+    }
+    const order = await Order.findOne(orderQuery);
 
     if (!order) {
       console.warn(
