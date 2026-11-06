@@ -915,7 +915,7 @@ app.get("/api/products", async (req, res) => {
           const User = require('./models/User');
           const dbUser = await User.findById(decoded.id).select('role');
           if (dbUser && dbUser.role === 'admin') {
-            const allProducts = await Product.find({ status: 'live' }).sort({ createdAt: -1 });
+            const allProducts = await Product.find({ status: { $in: ['live', 'draft', 'archived'] } }).sort({ createdAt: -1 });
             return res.status(200).json({ success: true, products: allProducts });
           }
         } catch (_jwtErr) {
@@ -1059,7 +1059,12 @@ app.post("/api/products", protect, requireAdmin, async (req, res) => {
       // Category-specific specifications
       specifications,
       enableAR, variants,
+      // Inventory, SKU, Shipping & SEO fields
+      sku, barcode, stock, isStockTracked, lowStockThreshold,
+      weight, dimensions, seoTitle, seoDescription, status,
     } = req.body;
+
+    const validatedStatus = (status && ['live', 'draft', 'archived'].includes(status)) ? status : 'live';
 
     const product = new Product({
       name, brand, category, subcategory, description,
@@ -1086,8 +1091,22 @@ app.post("/api/products", protect, requireAdmin, async (req, res) => {
       variants: Array.isArray(variants) ? variants.filter(v => v && typeof v === 'object' && (v.styleName || v.size || v.color || v.configuration)) : [],
       // AR toggle
       enableAR: enableAR !== undefined ? Boolean(enableAR) : true,
-      // SECURITY: Force these fields — cannot be set by the request
-      status: "live",
+      // Inventory & identifiers
+      sku: typeof sku === 'string' ? sku.trim() : '',
+      barcode: typeof barcode === 'string' ? barcode.trim() : '',
+      stock: (stock !== undefined && stock !== null && stock !== '') ? Math.max(0, parseInt(stock, 10) || 0) : null,
+      isStockTracked: Boolean(isStockTracked),
+      lowStockThreshold: typeof lowStockThreshold === 'number' ? lowStockThreshold : 5,
+      weight: typeof weight === 'number' ? weight : (parseFloat(weight) || null),
+      dimensions: (dimensions && typeof dimensions === 'object') ? {
+        length: parseFloat(dimensions.length) || null,
+        width: parseFloat(dimensions.width) || null,
+        height: parseFloat(dimensions.height) || null,
+      } : { length: null, width: null, height: null },
+      seoTitle: typeof seoTitle === 'string' ? seoTitle.trim() : '',
+      seoDescription: typeof seoDescription === 'string' ? seoDescription.trim() : '',
+      // Status & security controls
+      status: validatedStatus,
       isApproved: true,
       isOfficial: true,
       addedBy: req.user?.email || "admin",
@@ -1151,6 +1170,9 @@ app.put("/api/products/:id", protect, requireAdmin, async (req, res) => {
       'specifications',
       // Ambience Signature variants & AR
       'variants', 'enableAR',
+      // Inventory, SKU, Shipping & SEO fields
+      'sku', 'barcode', 'stock', 'isStockTracked', 'lowStockThreshold',
+      'weight', 'dimensions', 'seoTitle', 'seoDescription', 'status',
     ];
     const updates = {};
     for (const field of allowedFields) {

@@ -157,6 +157,44 @@ const productSchema = new mongoose.Schema(
       default: null, // null = untracked inventory, number = tracked quantity
       min: 0,
     },
+    isStockTracked: {
+      type: Boolean,
+      default: false,
+    },
+    lowStockThreshold: {
+      type: Number,
+      default: 5,
+      min: 0,
+    },
+    sku: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    barcode: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    weight: {
+      type: Number, // package weight in kg
+      default: null,
+    },
+    dimensions: {
+      length: { type: Number, default: null },
+      width: { type: Number, default: null },
+      height: { type: Number, default: null },
+    },
+    seoTitle: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    seoDescription: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     // ── Commission Model ────────────────────────────────────────────────────
     // Standard sellers (non-Deals): 5% commission per sale
     // Deal Page sellers (Pro subscribers): 0% commission (subscription covers it)
