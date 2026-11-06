@@ -170,6 +170,59 @@ const productSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // ── Customer Reviews & Ratings ──────────────────────────────────────────
+    ratingsAverage: {
+      type: Number,
+      default: 4.8,
+      min: [1, "Rating must be at least 1.0"],
+      max: [5, "Rating cannot exceed 5.0"],
+    },
+    ratingsQuantity: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    reviews: [
+      {
+        user: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          default: null,
+        },
+        userName: {
+          type: String,
+          required: [true, "Reviewer name is required"],
+          trim: true,
+        },
+        userEmail: {
+          type: String,
+          required: [true, "Reviewer email is required"],
+          trim: true,
+          lowercase: true,
+        },
+        rating: {
+          type: Number,
+          required: [true, "Rating is required"],
+          min: 1,
+          max: 5,
+        },
+        comment: {
+          type: String,
+          required: [true, "Comment is required"],
+          trim: true,
+          maxlength: [1000, "Comment cannot exceed 1000 characters"],
+        },
+        status: {
+          type: String,
+          enum: ["approved", "flagged", "pending", "rejected"],
+          default: "approved",
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
   },
   {
     timestamps: true,

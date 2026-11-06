@@ -65,6 +65,29 @@ const supportTicketSchema = new mongoose.Schema(
       default: "",
       maxlength: [2000, "Admin notes cannot exceed 2000 characters"],
     },
+    replies: [
+      {
+        sender: {
+          type: String,
+          enum: ["user", "admin"],
+          default: "admin",
+        },
+        senderName: {
+          type: String,
+          default: "Ambience Concierge",
+        },
+        message: {
+          type: String,
+          required: true,
+          trim: true,
+          maxlength: [2000, "Reply cannot exceed 2000 characters"],
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
   },
   {
     timestamps: true,

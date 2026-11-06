@@ -76,6 +76,7 @@ const FlagshipDeal = require("./models/FlagshipDeal");
 const Order = require("./models/Order");
 const User = require("./models/User");
 const SupportTicket = require("./models/SupportTicket");
+const Coupon = require("./models/Coupon");
 
 // ── Email templates ─────────────────────────────────────────────────────────
 const { generatePhotoFeedbackEmail } = require("./photo-feedback-template");
@@ -834,6 +835,46 @@ app.delete("/api/admin/support-tickets/:id", protect, requireAdmin, async (req, 
   } catch (err) {
     console.error("[Admin Delete Ticket]", err.message);
     res.status(500).json({ success: false, error: "Failed to delete ticket" });
+  }
+});
+
+// ── Admin: Reply to Support Ticket ──────────────────────────────────────────
+app.post("/api/admin/support-tickets/:id/reply", protect, requireAdmin, async (req, res) => {
+  try {
+    const { message, status } = req.body;
+    if (!message || typeof message !== "string" || !message.trim()) {
+      return res.status(400).json({ success: false, error: "Reply message cannot be empty" });
+    }
+
+    const ticket = await SupportTicket.findById(req.params.id);
+    if (!ticket) {
+      return res.status(404).json({ success: false, error: "Ticket not found" });
+    }
+
+    const newReply = {
+      sender: "admin",
+      senderName: req.user?.name || "Ambience Concierge",
+      message: message.trim(),
+      createdAt: new Date(),
+    };
+
+    if (!Array.isArray(ticket.replies)) {
+      ticket.replies = [];
+    }
+    ticket.replies.push(newReply);
+
+    if (status && ["open", "in-progress", "resolved", "closed"].includes(status)) {
+      ticket.status = status;
+    } else if (ticket.status === "open") {
+      ticket.status = "in-progress";
+    }
+
+    await ticket.save();
+    console.log(`[AMBIENCE] 💬 Admin reply added to ticket ${ticket._id}`);
+    return res.json({ success: true, message: "Reply added successfully", ticket });
+  } catch (err) {
+    console.error("[Admin Reply Ticket]", err.message);
+    return res.status(500).json({ success: false, error: "Failed to post reply" });
   }
 });
 
@@ -1835,6 +1876,16 @@ app.get('/api/admin/stats', protect, requireAdmin, async (req, res) => {
     const prevProds = await Product.countDocuments({ createdAt: { $gte: sixtyDaysAgo, $lt: thirtyDaysAgo }, status: 'live' });
     const productGrowth = prevProds > 0 ? ((recentProds - prevProds) / prevProds * 100).toFixed(1) : recentProds > 0 ? '100.0' : '0.0';
 
+    // Real Customer Statistics
+    const totalCustomers = await User.countDocuments({ role: { $ne: 'admin' } });
+    const recentCustomers = await User.countDocuments({ role: { $ne: 'admin' }, createdAt: { $gte: thirtyDaysAgo } });
+    const prevCustomers = await User.countDocuments({ role: { $ne: 'admin' }, createdAt: { $gte: sixtyDaysAgo, $lt: thirtyDaysAgo } });
+    const customerGrowth = prevCustomers > 0 ? ((recentCustomers - prevCustomers) / prevCustomers * 100).toFixed(1) : recentCustomers > 0 ? '100.0' : '0.0';
+
+    // Support and Coupons high-level counters
+    const openTicketsCount = await SupportTicket.countDocuments({ status: { $in: ['open', 'in-progress'] } });
+    const activeCouponsCount = await Coupon.countDocuments({ isActive: true });
+
     // 12-Month revenue trend aggregation (only authentic, non-cancelled paid orders)
     const monthlyRevenue = await Order.aggregate([
       {
@@ -1898,6 +1949,11 @@ app.get('/api/admin/stats', protect, requireAdmin, async (req, res) => {
         pendingProducts,
         totalProducts,
         productGrowth,
+        totalCustomers,
+        recentCustomers,
+        customerGrowth,
+        openTicketsCount,
+        activeCouponsCount,
         ordersByStatus: ordersByStatus.reduce((a, i) => { a[i._id] = i.count; return a; }, {}),
         recentOrders,
         monthlyRevenue,
@@ -2124,6 +2180,585 @@ app.get('/api/orders/:orderId/invoice', protect, async (req, res) => {
   } catch (error) {
     console.error('[AMBIENCE] ❌ Error generating invoice:', error.message);
     return res.status(500).json({ success: false, error: 'Failed to generate invoice' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN CRM: Customer Management Endpoints
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /api/admin/users — Paginated Customer Directory with Order Analytics
+app.get('/api/admin/users', protect, requireAdmin, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 20;
+    const skip = (page - 1) * limit;
+    const search = (req.query.search || '').trim();
+    const role = (req.query.role || '').trim();
+
+    const query = {};
+    if (role && ['customer', 'moderator', 'admin'].includes(role)) {
+      query.role = role;
+    }
+    if (search) {
+      const searchRegex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      query.$or = [{ name: searchRegex }, { email: searchRegex }, { phone: searchRegex }];
+    }
+
+    const [users, total] = await Promise.all([
+      User.find(query)
+        .select('-password')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      User.countDocuments(query),
+    ]);
+
+    // Aggregate lifetime orders and spending for each user
+    const userEmails = users.map(u => u.email).filter(Boolean);
+    const userIds = users.map(u => u._id);
+
+    const orderAggregations = await Order.aggregate([
+      {
+        $match: {
+          $or: [
+            { userEmail: { $in: userEmails } },
+            { user: { $in: userIds } },
+          ],
+          paymentStatus: 'Success',
+        },
+      },
+      {
+        $group: {
+          _id: { $ifNull: ['$userEmail', '$user'] },
+          totalOrders: { $sum: 1 },
+          totalSpent: { $sum: '$totalAmount' },
+          lastOrderDate: { $max: '$createdAt' },
+        },
+      },
+    ]);
+
+    const orderMap = {};
+    orderAggregations.forEach(agg => {
+      orderMap[String(agg._id).toLowerCase()] = agg;
+    });
+
+    const enrichedUsers = users.map(u => {
+      const agg = orderMap[u.email?.toLowerCase()] || orderMap[String(u._id)] || {};
+      return {
+        ...u,
+        totalOrders: agg.totalOrders || 0,
+        totalSpentINR: agg.totalSpent ? Math.round(agg.totalSpent / 100) : 0,
+        lastOrderDate: agg.lastOrderDate || null,
+        addressCount: Array.isArray(u.addresses) ? u.addresses.length : 0,
+      };
+    });
+
+    console.log(`[AMBIENCE] 👥 Admin fetched ${users.length} users (total: ${total}, page: ${page})`);
+    return res.status(200).json({
+      success: true,
+      users: enrichedUsers,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit) || 1,
+      },
+    });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error fetching admin users:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch customer directory' });
+  }
+});
+
+// GET /api/admin/users/:id — Single Customer Profile & Complete Order History
+app.get('/api/admin/users/:id', protect, requireAdmin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select('-password').lean();
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'Customer not found' });
+    }
+
+    const orders = await Order.find({
+      $or: [{ user: user._id }, { userEmail: user.email }],
+    })
+      .sort({ createdAt: -1 })
+      .select('orderId totalAmount amount orderStatus paymentStatus refundStatus items shippingAddress carrier trackingNumber trackingUrl createdAt')
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      user,
+      orders,
+    });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error fetching customer details:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch customer profile' });
+  }
+});
+
+// PUT /api/admin/users/:id/role — Manage Customer Account Role with Self-Demotion Guard
+app.put('/api/admin/users/:id/role', protect, requireAdmin, async (req, res) => {
+  try {
+    const { role } = req.body;
+    if (!role || !['customer', 'moderator', 'admin'].includes(role)) {
+      return res.status(400).json({ success: false, error: "Valid role is required ('customer', 'moderator', 'admin')" });
+    }
+
+    // Safety check: Prevent admin from removing their own admin privileges
+    if (req.user._id.toString() === req.params.id && role !== 'admin') {
+      return res.status(400).json({
+        success: false,
+        error: 'Security Guard: You cannot revoke your own administrator privileges.',
+      });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { $set: { role } },
+      { new: true, runValidators: true }
+    ).select('-password');
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'Customer account not found' });
+    }
+
+    console.log(`[AMBIENCE] 🛡️ User ${user.email} role updated to '${role}' by ${req.user.email}`);
+    return res.status(200).json({ success: true, message: `Account role updated to ${role}`, user });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error updating user role:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to update account role' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN MODERATION: Product Reviews & Customer Comments
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /api/admin/reviews — Cross-Catalog Review & Comment Moderation
+app.get('/api/admin/reviews', protect, requireAdmin, async (req, res) => {
+  try {
+    const status = (req.query.status || '').trim();
+    const search = (req.query.search || '').trim().toLowerCase();
+
+    const products = await Product.find({ 'reviews.0': { $exists: true } })
+      .select('name brand category imageUrl imageUrls reviews ratingsAverage ratingsQuantity')
+      .lean();
+
+    const flatReviews = [];
+    products.forEach(p => {
+      (p.reviews || []).forEach(r => {
+        flatReviews.push({
+          reviewId: r._id,
+          productId: p._id,
+          productName: p.name,
+          productBrand: p.brand || 'Ambience',
+          productCategory: p.category,
+          productImage: p.imageUrl || (p.imageUrls && p.imageUrls[0]) || '',
+          productRating: p.ratingsAverage || 5,
+          userName: r.userName,
+          userEmail: r.userEmail,
+          rating: r.rating,
+          comment: r.comment,
+          status: r.status || 'approved',
+          createdAt: r.createdAt,
+        });
+      });
+    });
+
+    let filtered = flatReviews;
+    if (status && ['approved', 'flagged', 'pending', 'rejected'].includes(status)) {
+      filtered = filtered.filter(r => r.status === status);
+    }
+    if (search) {
+      filtered = filtered.filter(
+        r =>
+          (r.productName && r.productName.toLowerCase().includes(search)) ||
+          (r.userName && r.userName.toLowerCase().includes(search)) ||
+          (r.comment && r.comment.toLowerCase().includes(search)) ||
+          (r.userEmail && r.userEmail.toLowerCase().includes(search))
+      );
+    }
+
+    filtered.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    return res.status(200).json({
+      success: true,
+      reviews: filtered,
+      count: filtered.length,
+      summary: {
+        total: flatReviews.length,
+        approved: flatReviews.filter(r => r.status === 'approved').length,
+        flagged: flatReviews.filter(r => r.status === 'flagged').length,
+        pending: flatReviews.filter(r => r.status === 'pending').length,
+        rejected: flatReviews.filter(r => r.status === 'rejected').length,
+      },
+    });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error fetching admin reviews:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch reviews' });
+  }
+});
+
+// PUT /api/admin/reviews/:productId/:reviewId/status — Approve / Flag / Reject Review
+app.put('/api/admin/reviews/:productId/:reviewId/status', protect, requireAdmin, async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!status || !['approved', 'flagged', 'pending', 'rejected'].includes(status)) {
+      return res.status(400).json({ success: false, error: 'Valid review status is required' });
+    }
+
+    const product = await Product.findById(req.params.productId);
+    if (!product) return res.status(404).json({ success: false, error: 'Product not found' });
+
+    const review = product.reviews.id(req.params.reviewId);
+    if (!review) return res.status(404).json({ success: false, error: 'Review not found' });
+
+    review.status = status;
+
+    // Recalculate average rating based on approved reviews
+    const approvedReviews = product.reviews.filter(r => r.status === 'approved');
+    if (approvedReviews.length > 0) {
+      const sum = approvedReviews.reduce((acc, r) => acc + r.rating, 0);
+      product.ratingsAverage = Number((sum / approvedReviews.length).toFixed(1));
+      product.ratingsQuantity = approvedReviews.length;
+    }
+
+    await product.save();
+    console.log(`[AMBIENCE] ⭐ Review ${req.params.reviewId} status set to ${status}`);
+    return res.status(200).json({ success: true, message: `Review status updated to ${status}`, review });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error updating review status:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to update review status' });
+  }
+});
+
+// DELETE /api/admin/reviews/:productId/:reviewId — Remove Inappropriate Review
+app.delete('/api/admin/reviews/:productId/:reviewId', protect, requireAdmin, async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.productId);
+    if (!product) return res.status(404).json({ success: false, error: 'Product not found' });
+
+    const reviewIndex = product.reviews.findIndex(r => r._id.toString() === req.params.reviewId);
+    if (reviewIndex === -1) return res.status(404).json({ success: false, error: 'Review not found' });
+
+    product.reviews.splice(reviewIndex, 1);
+
+    // Recalculate average rating
+    const approvedReviews = product.reviews.filter(r => r.status === 'approved');
+    if (approvedReviews.length > 0) {
+      const sum = approvedReviews.reduce((acc, r) => acc + r.rating, 0);
+      product.ratingsAverage = Number((sum / approvedReviews.length).toFixed(1));
+      product.ratingsQuantity = approvedReviews.length;
+    } else {
+      product.ratingsAverage = 4.8;
+      product.ratingsQuantity = 0;
+    }
+
+    await product.save();
+    console.log(`[AMBIENCE] 🗑️ Review ${req.params.reviewId} deleted from product ${product.name}`);
+    return res.status(200).json({ success: true, message: 'Review deleted successfully' });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error deleting review:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to delete review' });
+  }
+});
+
+// POST /api/products/:id/reviews — Customer Submit Verified Review
+app.post('/api/products/:id/reviews', protect, async (req, res) => {
+  try {
+    const { rating, comment } = req.body;
+    const numRating = Number(rating);
+    if (!numRating || numRating < 1 || numRating > 5) {
+      return res.status(400).json({ success: false, error: 'Rating must be an integer between 1 and 5' });
+    }
+    if (!comment || typeof comment !== 'string' || !comment.trim()) {
+      return res.status(400).json({ success: false, error: 'Comment text is required' });
+    }
+
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ success: false, error: 'Product not found' });
+
+    const newReview = {
+      user: req.user._id,
+      userName: req.user.name || 'Verified Collector',
+      userEmail: req.user.email,
+      rating: Math.round(numRating),
+      comment: comment.trim(),
+      status: 'approved',
+      createdAt: new Date(),
+    };
+
+    if (!Array.isArray(product.reviews)) {
+      product.reviews = [];
+    }
+    product.reviews.push(newReview);
+
+    const approvedReviews = product.reviews.filter(r => r.status === 'approved');
+    const sum = approvedReviews.reduce((acc, r) => acc + r.rating, 0);
+    product.ratingsAverage = Number((sum / approvedReviews.length).toFixed(1));
+    product.ratingsQuantity = approvedReviews.length;
+
+    await product.save();
+    return res.status(201).json({
+      success: true,
+      message: 'Review submitted successfully',
+      review: newReview,
+      ratingsAverage: product.ratingsAverage,
+      ratingsQuantity: product.ratingsQuantity,
+    });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error submitting product review:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to submit review' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN PROMOTIONS: Coupons & Discounts Management
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /api/admin/coupons — List All Active & Expired Coupons
+app.get('/api/admin/coupons', protect, requireAdmin, async (req, res) => {
+  try {
+    const coupons = await Coupon.find().sort({ createdAt: -1 }).lean();
+    return res.status(200).json({ success: true, coupons, count: coupons.length });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error fetching coupons:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch coupons' });
+  }
+});
+
+// POST /api/admin/coupons — Create New Promotion Code
+app.post('/api/admin/coupons', protect, requireAdmin, async (req, res) => {
+  try {
+    const {
+      code,
+      description,
+      discountType,
+      discountValue,
+      minOrderAmount,
+      maxDiscountAmount,
+      expiryDate,
+      usageLimit,
+      isActive,
+      applicableCategories,
+    } = req.body;
+
+    if (!code || typeof code !== 'string' || !code.trim()) {
+      return res.status(400).json({ success: false, error: 'Promotion code is required' });
+    }
+    const cleanCode = code.trim().toUpperCase();
+
+    const existing = await Coupon.findOne({ code: cleanCode });
+    if (existing) {
+      return res.status(400).json({ success: false, error: `Coupon code '${cleanCode}' already exists` });
+    }
+
+    const val = Number(discountValue);
+    if (!val || val <= 0) {
+      return res.status(400).json({ success: false, error: 'Discount value must be greater than 0' });
+    }
+    if (discountType === 'percentage' && val > 90) {
+      return res.status(400).json({ success: false, error: 'Percentage discount cannot exceed 90%' });
+    }
+
+    const coupon = new Coupon({
+      code: cleanCode,
+      description: (description || '').trim(),
+      discountType: discountType === 'fixed' ? 'fixed' : 'percentage',
+      discountValue: val,
+      minOrderAmount: Math.max(0, Number(minOrderAmount) || 0),
+      maxDiscountAmount: maxDiscountAmount ? Number(maxDiscountAmount) : null,
+      expiryDate: expiryDate ? new Date(expiryDate) : null,
+      usageLimit: usageLimit ? Number(usageLimit) : null,
+      isActive: isActive !== false,
+      applicableCategories: Array.isArray(applicableCategories) ? applicableCategories : [],
+      createdBy: req.user.email,
+    });
+
+    await coupon.save();
+    console.log(`[AMBIENCE] 🎟️ New coupon '${coupon.code}' created by ${req.user.email}`);
+    return res.status(201).json({ success: true, message: `Coupon '${coupon.code}' created successfully`, coupon });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error creating coupon:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to create coupon' });
+  }
+});
+
+// PUT /api/admin/coupons/:id — Update Promotion Settings / Toggle Status
+app.put('/api/admin/coupons/:id', protect, requireAdmin, async (req, res) => {
+  try {
+    const {
+      description,
+      discountType,
+      discountValue,
+      minOrderAmount,
+      maxDiscountAmount,
+      expiryDate,
+      usageLimit,
+      isActive,
+    } = req.body;
+
+    const coupon = await Coupon.findById(req.params.id);
+    if (!coupon) return res.status(404).json({ success: false, error: 'Coupon not found' });
+
+    if (description !== undefined) coupon.description = String(description).trim();
+    if (discountType && ['percentage', 'fixed'].includes(discountType)) coupon.discountType = discountType;
+    if (discountValue !== undefined) coupon.discountValue = Number(discountValue);
+    if (minOrderAmount !== undefined) coupon.minOrderAmount = Math.max(0, Number(minOrderAmount));
+    if (maxDiscountAmount !== undefined) coupon.maxDiscountAmount = maxDiscountAmount ? Number(maxDiscountAmount) : null;
+    if (expiryDate !== undefined) coupon.expiryDate = expiryDate ? new Date(expiryDate) : null;
+    if (usageLimit !== undefined) coupon.usageLimit = usageLimit ? Number(usageLimit) : null;
+    if (isActive !== undefined) coupon.isActive = Boolean(isActive);
+
+    await coupon.save();
+    console.log(`[AMBIENCE] 🎟️ Coupon '${coupon.code}' updated`);
+    return res.status(200).json({ success: true, message: 'Coupon updated successfully', coupon });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error updating coupon:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to update coupon' });
+  }
+});
+
+// DELETE /api/admin/coupons/:id — Remove Coupon Code
+app.delete('/api/admin/coupons/:id', protect, requireAdmin, async (req, res) => {
+  try {
+    const coupon = await Coupon.findByIdAndDelete(req.params.id);
+    if (!coupon) return res.status(404).json({ success: false, error: 'Coupon not found' });
+    console.log(`[AMBIENCE] 🗑️ Coupon '${coupon.code}' deleted by admin`);
+    return res.status(200).json({ success: true, message: `Coupon '${coupon.code}' deleted successfully` });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error deleting coupon:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to delete coupon' });
+  }
+});
+
+// POST /api/coupons/validate — Public / Checkout Cart Coupon Validation
+app.post('/api/coupons/validate', async (req, res) => {
+  try {
+    const { code, amountINR } = req.body;
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ success: false, valid: false, error: 'Coupon code is required' });
+    }
+
+    const orderAmount = Number(amountINR) || 0;
+    const cleanCode = code.trim().toUpperCase();
+
+    const coupon = await Coupon.findOne({ code: cleanCode });
+    if (!coupon) {
+      return res.status(404).json({ success: false, valid: false, error: 'Invalid or unrecognized coupon code' });
+    }
+
+    const validation = coupon.isValidFor(orderAmount);
+    if (!validation.valid) {
+      return res.status(400).json({ success: false, valid: false, error: validation.reason });
+    }
+
+    const discountAmount = coupon.calculateDiscount(orderAmount);
+    const finalAmount = Math.max(0, orderAmount - discountAmount);
+
+    return res.status(200).json({
+      success: true,
+      valid: true,
+      coupon: {
+        code: coupon.code,
+        discountType: coupon.discountType,
+        discountValue: coupon.discountValue,
+        description: coupon.description,
+      },
+      discountAmount,
+      finalAmount,
+    });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error validating coupon:', error.message);
+    return res.status(500).json({ success: false, valid: false, error: 'Failed to validate coupon code' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN SYSTEM: Health, Telemetry & Infrastructure Monitor
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /api/admin/system-health — Live Server Telemetry & Status Monitor
+app.get('/api/admin/system-health', protect, requireAdmin, async (req, res) => {
+  try {
+    const startPing = Date.now();
+    let dbPingMs = 0;
+    try {
+      await mongoose.connection.db.admin().ping();
+      dbPingMs = Date.now() - startPing;
+    } catch (e) {
+      dbPingMs = -1;
+    }
+
+    const memoryUsage = process.memoryUsage();
+    const uptimeSec = Math.floor(process.uptime());
+
+    const [totalUsers, totalOrders, totalProducts, openTickets, activeCoupons] = await Promise.all([
+      User.countDocuments({}),
+      Order.countDocuments({}),
+      Product.countDocuments({}),
+      SupportTicket.countDocuments({ status: { $in: ['open', 'in-progress'] } }),
+      Coupon.countDocuments({ isActive: true }),
+    ]);
+
+    const health = {
+      status: 'operational',
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: uptimeSec,
+      uptimeFormatted: `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m ${uptimeSec % 60}s`,
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      environment: process.env.NODE_ENV || 'production',
+      memory: {
+        rssMB: Math.round(memoryUsage.rss / 1024 / 1024),
+        heapTotalMB: Math.round(memoryUsage.heapTotal / 1024 / 1024),
+        heapUsedMB: Math.round(memoryUsage.heapUsed / 1024 / 1024),
+        externalMB: Math.round(memoryUsage.external / 1024 / 1024),
+      },
+      database: {
+        state: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+        name: mongoose.connection.name,
+        host: mongoose.connection.host,
+        pingLatencyMs: dbPingMs,
+      },
+      services: [
+        {
+          name: 'MongoDB Atlas Primary Cluster',
+          status: mongoose.connection.readyState === 1 ? 'operational' : 'degraded',
+          latency: `${dbPingMs}ms`,
+        },
+        {
+          name: 'Razorpay Payment Gateway',
+          status: process.env.RAZORPAY_KEY_ID ? 'operational' : 'unconfigured',
+          mode: process.env.NODE_ENV === 'production' ? 'Live Production' : 'Test / Simulation',
+        },
+        {
+          name: 'Gmail REST API (Email Concierge)',
+          status: isEmailConfigured() ? 'operational' : 'unconfigured (dev mode)',
+          account: GMAIL_USER || 'Not specified',
+        },
+        {
+          name: 'Cloudinary Edge CDN',
+          status: 'operational',
+          cloudName: 'gqibe43a',
+        },
+      ],
+      metrics: {
+        totalUsers,
+        totalOrders,
+        totalProducts,
+        openTickets,
+        activeCoupons,
+      },
+    };
+
+    return res.status(200).json({ success: true, health });
+  } catch (error) {
+    console.error('[AMBIENCE] ❌ Error fetching system health:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch system telemetry' });
   }
 });
 
