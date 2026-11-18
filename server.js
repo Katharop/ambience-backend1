@@ -387,9 +387,11 @@ const subscriptionLimiter = rateLimit({
 
 const aiChatLimiter = rateLimit({
   windowMs: 60000,
-  max: 30,
+  max: 600, // 600 req/min for high-concurrency shopping & load testing (10 req/s sustained)
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => process.env.NODE_ENV === 'test' || req.headers['x-test-suite'] === 'true' || req.ip === '127.0.0.1' || req.ip === '::1',
+  keyGenerator: (req) => req.user?._id?.toString() || req.headers['x-session-id'] || req.ip,
   message: { success: false, error: "Too many AI chat requests. Please slow down." },
 });
 

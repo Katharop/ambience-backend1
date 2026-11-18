@@ -141,7 +141,7 @@ Use the exact product _id from the currentlyVisibleProducts array.`,
     name: "addToCart",
     description: `Add a product to the user's shopping cart.
 
-Use productId = "current" when user says "add this" / "cart-la podu" / "இதை கார்ட்ல போடு" / "कार्ट में डालो" while on a product detail page.
+Use productId = "current" when user says "add this" / "cart-la podu" / "இதை கார்ட்ல போடு" / "कार्ट में डालो" / "cop that" / "throw in my cart" while on a product detail page.
 
 Use exact MongoDB _id when adding a specific product discussed in conversation.
 
@@ -162,6 +162,68 @@ MANDATORY UPSELL: After every ADD_TO_CART, suggest a complementary product:
         }
       },
       required: ["productId"]
+    }
+  },
+
+  // ── REMOVE FROM CART ────────────────────────────────────────────────────────
+  {
+    name: "removeFromCart",
+    description: `Remove a product from the user's shopping cart.
+Use productId = exact MongoDB _id or "current".`,
+    parameters: {
+      type: "OBJECT",
+      properties: {
+        productId: {
+          type: "STRING",
+          description: "MongoDB _id of the product to remove, or 'current'."
+        }
+      },
+      required: ["productId"]
+    }
+  },
+
+  // ── CLEAR CART ──────────────────────────────────────────────────────────────
+  {
+    name: "clearCart",
+    description: `Empty or clear all products from the user's shopping cart.
+Use when user says "clear my cart", "empty cart", "delete everything in cart", "remove all items".`,
+    parameters: {
+      type: "OBJECT",
+      properties: {},
+      required: []
+    }
+  },
+
+  // ── VIEW CART ───────────────────────────────────────────────────────────────
+  {
+    name: "viewCart",
+    description: `Open the user's shopping cart page (/cart) and review its contents.
+Use when user says "show my cart", "open cart", "what's in my cart", "view basket".`,
+    parameters: {
+      type: "OBJECT",
+      properties: {},
+      required: []
+    }
+  },
+
+  // ── UPDATE QUANTITY ─────────────────────────────────────────────────────────
+  {
+    name: "updateQuantity",
+    description: `Increase or decrease the quantity of a product in the cart.
+change: +1 to increase, -1 to decrease.`,
+    parameters: {
+      type: "OBJECT",
+      properties: {
+        productId: {
+          type: "STRING",
+          description: "MongoDB _id of the product or 'current'."
+        },
+        change: {
+          type: "INTEGER",
+          description: "+1 to increase, -1 to decrease."
+        }
+      },
+      required: ["productId", "change"]
     }
   },
 
@@ -314,6 +376,18 @@ function mapFunctionCallToAction(functionCall) {
 
     case "addToCart":
       return { action: "ADD_TO_CART", productId: args.productId };
+
+    case "removeFromCart":
+      return { action: "REMOVE_FROM_CART", productId: args.productId };
+
+    case "clearCart":
+      return { action: "CLEAR_CART" };
+
+    case "viewCart":
+      return { action: "NAVIGATE_ROUTE", path: "/cart" };
+
+    case "updateQuantity":
+      return { action: "UPDATE_QTY", productId: args.productId, change: args.change || 1 };
 
     case "filterByCategory":
       return {
