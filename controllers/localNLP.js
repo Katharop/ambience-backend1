@@ -285,10 +285,18 @@ exports.processLocally = async (message, user, recentOrders = [], conversationHi
   }
 };
 
-// Smart fallback — NEVER shows connectivity errors
+// Smart fallback — NEVER shows connectivity errors and rotates dynamically
+let fallbackTurn = 0;
 exports.getFallbackResponse = (message, lang) => {
+  fallbackTurn++;
+  const englishFallbacks = [
+    "I'm tuned in! Whether you're looking for iconic timepieces, designer kicks, or tailored fits, just tell me your vibe.",
+    "Got you covered! Tell me what style or occasion you have in mind and I'll curate our finest pieces.",
+    "Right here with you! Looking for something specific like luxury watches, modern streetwear, or fragrances today?",
+    "I can pull up our latest arrivals, filter by your preferred price, or manage your cart in a flash. Where shall we start?"
+  ];
   const fallbacks = {
-    english: "I'm right here with you! What kind of luxury piece or collection are you looking for today?",
+    english: englishFallbacks[fallbackTurn % englishFallbacks.length],
     tamil: "உதவி செய்ய நான் தயார்! இன்னைக்கு என்ன கலெக்ஷன் பாக்கணும்?",
     malayalam: "സഹായിക്കാൻ ഞാൻ തയ്യാറാണ്! ഇന്ന് എന്ത് കളക്ഷനാണ് നോക്കുന്നത്?",
     hindi: "मैं आपकी मदद के लिए यहाँ हूँ! आज क्या खास देखना चाहते हैं?"

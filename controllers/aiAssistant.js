@@ -500,7 +500,7 @@ exports.chat = async (req, res) => {
     // ── Tier 4: Smart product-aware fallback (LOCAL & FAST) ───────────────────
     console.log('[Ambience AI] ⚠️ All external APIs unavailable — smart local fallback.');
     const lang = detectedLang === 'ta' ? 'tamil' : detectedLang === 'ml' ? 'malayalam' : detectedLang === 'hi' ? 'hindi' : 'english';
-    const smartFallback = await buildSmartFallback(cleanMessage, lang, currentlyVisibleProducts, catalogProducts, sessionContext);
+    const smartFallback = await buildSmartFallback(cleanMessage, lang, currentlyVisibleProducts, catalogProducts, sessionContext, promptContext);
     updateSessionFromActions(sessionId, sessionContext, smartFallback.actions, currentlyVisibleProducts);
     return res.json({ success: true, response: normalizeResponse(smartFallback) });
 
@@ -734,40 +734,139 @@ const NAV_KEYWORDS = {
   '/shop/accessories': ['accessories', 'jewelry', 'belts', 'wallets', 'sunglasses', 'sunnies']
 };
 
-async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], catalogProducts = [], sessionContext = {}) {
+async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], catalogProducts = [], sessionContext = {}, promptContext = {}) {
   const lower = message.toLowerCase();
+  const {
+    currentPage = '/',
+    cartItems = [],
+    companionPersona = 'jolly',
+    recentOrders = []
+  } = promptContext;
+
+  const findInCatalog = (id) => (catalogProducts || []).find(p => String(p._id || p.id) === String(id));
+  const lastReferencedItem = sessionContext.lastReferencedProduct ? findInCatalog(sessionContext.lastReferencedProduct) : null;
 
   // 1. CLEAR CART
   if (lower.match(/\b(clear my cart|clear cart|empty my cart|empty cart|delete everything in cart|dump cart)\b/)) {
     return {
-      text: "Your cart is now completely cleared! Let's find something fresh.",
+      text: "Your cart is now completely cleared! Ready for fresh luxury selections.",
       actions: [{ action: "CLEAR_CART" }],
       emotion: "happy",
       language: "en"
     };
   }
 
-  // 2. ADD TO CART WITH SLANG (American, British, Indian, Australian)
-  const isAddCart = lower.match(/\b(add to cart|cop that|cop this|chuck in the basket|chuck in cart|chuck that in|toss in my cart|toss in cart|pack that one|put in cart ya|put in cart na|grab this|snag this|add to basket)\b/);
+  // 2. CONTEXTUAL REMOVE FROM CART ("actually, remove it", "remove from cart", "remove it", "take that out", "drop this")
+  const isRemoveCart = lower.match(/\b(actually,?\s*remove|remove it|take it out|remove that|take that out|delete that|remove from cart|drop this|cancel this item)\b/);
+  if (isRemoveCart) {
+    let targetToRemove = null;
+    if (lastReferencedItem) {
+      targetToRemove = lastReferencedItem;
+    } else if (Array.isArray(cartItems) && cartItems.length > 0) {
+      targetToRemove = cartItems[cartItems.length - 1];
+    }
+
+    if (targetToRemove) {
+      const pid = targetToRemove._id || targetToRemove.id;
+      return {
+        text: `Got it! I've removed ${targetToRemove.name || 'the item'} from your cart.`,
+        actions: [{ action: "REMOVE_FROM_CART", productId: pid, delay: 600 }],
+        emotion: "happy",
+        language: "en"
+      };
+    }
+    return {
+      text: "Sure, removing that item from your cart!",
+      actions: [{ action: "REMOVE_FROM_CART", productId: "current", delay: 600 }],
+      emotion: "happy",
+      language: "en"
+    };
+  }
+
+  // 3. ADD TO CART WITH SLANG (American, British, Indian, Australian) + Context Resolution
+  const isAddCart = lower.match(/\b(add to cart|add that to cart|add this to cart|cop that|cop this|chuck in the basket|chuck in cart|chuck that in|toss in my cart|toss in cart|pack that one|put in cart ya|put in cart na|grab this|snag this|add to basket)\b/);
   if (isAddCart) {
+    let target = null;
     if (currentlyVisibleProducts && currentlyVisibleProducts.length > 0) {
-      const target = currentlyVisibleProducts[0];
+      target = currentlyVisibleProducts[0];
+    } else if (lastReferencedItem) {
+      target = lastReferencedItem;
+    }
+
+    if (target) {
+      const targetId = target.id || target._id;
+      sessionContext.lastReferencedProduct = targetId;
       return {
         text: `Added ${target.name} right to your cart!`,
-        actions: [{ action: "ADD_TO_CART", productId: target.id || target._id }],
+        actions: [{ action: "ADD_TO_CART", productId: targetId, product: target }],
         emotion: "excited",
         language: "en"
       };
     }
     return {
-      text: "Adding that to your cart!",
+      text: "Adding that right into your cart!",
       actions: [{ action: "ADD_TO_CART", productId: "current" }],
       emotion: "excited",
       language: "en"
     };
   }
 
-  // 3. PHONETIC NAVIGATION DISAMBIGUATOR (HIGHEST PRIORITY)
+  // 4. COMPARATIVE REFINEMENT & PRICING INTENT ("something cheaper", "sasta", "cheaper option", "more expensive")
+  const isCheaper = lower.match(/\b(something cheaper|cheaper one|cheaper option|cheaper please|cheaper|sasta|lowest price|lower price|less expensive|budget friendly|more affordable|show me cheaper)\b/);
+  if (isCheaper) {
+    let cheapestItem = null;
+    const pool = (currentlyVisibleProducts && currentlyVisibleProducts.length > 0) ? currentlyVisibleProducts : (catalogProducts || []);
+    if (pool.length > 0) {
+      const sorted = [...pool].sort((a, b) => {
+        const pA = Number(a.dealPrice || a.retailPrice || (typeof a.price === 'string' ? a.price.replace(/[^\d]/g, '') : a.price) || 999999);
+        const pB = Number(b.dealPrice || b.retailPrice || (typeof b.price === 'string' ? b.price.replace(/[^\d]/g, '') : b.price) || 999999);
+        return pA - pB;
+      });
+      cheapestItem = sorted[0];
+    }
+
+    const priceVal = cheapestItem ? (cheapestItem.dealPrice || cheapestItem.retailPrice || cheapestItem.price) : null;
+    const priceStr = priceVal ? ` at ₹${Number(priceVal).toLocaleString('en-IN')}` : '';
+    const highlight = cheapestItem ? ` Here are our most accessible pieces sorted by lowest price, starting with ${cheapestItem.name}${priceStr}.` : ' Sorting by lowest price for you!';
+    return {
+      text: highlight,
+      actions: [{ action: "SORT_PRODUCTS", sortBy: "price-asc" }],
+      emotion: "excited",
+      language: "en"
+    };
+  }
+
+  const isExpensive = lower.match(/\b(most expensive|highest price|more expensive|premium|top tier|luxury first|highest)\b/);
+  if (isExpensive) {
+    return {
+      text: "Sorting by our most prestigious, high-end signature pieces first.",
+      actions: [{ action: "SORT_PRODUCTS", sortBy: "price-desc" }],
+      emotion: "excited",
+      language: "en"
+    };
+  }
+
+  // 5. CONVERSATIONAL CLOTHING & STYLING ADVICE ("something good to wear", "what should I wear?", "dress me up", "outfit for tonight")
+  const isStylingAdvice = lower.match(/\b(something (?:good|nice|cool|fresh) to wear|what should i wear|dress me up|outfit for|style advice|recommend an outfit|what do you recommend to wear|help me choose clothes)\b/);
+  if (isStylingAdvice) {
+    const fashionItems = (catalogProducts || []).filter(p => {
+      const cat = (p.category || '').toLowerCase();
+      const type = (p.productType || '').toLowerCase();
+      return cat.includes('men') || cat.includes('women') || cat.includes('fashion') || ['shirt', 'jacket', 'dress', 'shoes'].includes(type);
+    });
+    const p1 = fashionItems[0] || (catalogProducts && catalogProducts[0]);
+    const p2 = fashionItems[1] || (catalogProducts && catalogProducts[1]);
+    const name1 = p1 ? p1.name : "our tailored Minimalist Jacket";
+    const name2 = p2 ? p2.name : "the Obsidian Chelsea Boots";
+    return {
+      text: `For a standout look, I'd recommend pairing ${name1} with ${name2}. Are you leaning toward effortless luxury streetwear or tailored formal elegance?`,
+      actions: [{ action: "GLOBAL_SEARCH", query: "clothing" }],
+      emotion: "excited",
+      language: "en"
+    };
+  }
+
+  // 6. PHONETIC NAVIGATION DISAMBIGUATOR (HIGHEST PRIORITY)
   for (const override of NAVIGATION_PHONETIC_OVERRIDES) {
     for (const pattern of override.patterns) {
       if (lower.includes(pattern)) {
@@ -782,7 +881,7 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
     }
   }
 
-  // 4. Positional Commands (Screen Awareness) — 0-based index
+  // 7. Positional Commands (Screen Awareness) — 0-based index
   const positionalMatch = lower.match(/(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|top|bottom|number \d|1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th)/);
   if (positionalMatch && currentlyVisibleProducts && currentlyVisibleProducts.length > 0) {
     let index = 0;
@@ -803,6 +902,7 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
     index = Math.max(0, Math.min(index, currentlyVisibleProducts.length - 1));
     const targetProduct = currentlyVisibleProducts[index];
     if (targetProduct) {
+       sessionContext.lastReferencedProduct = targetProduct.id || targetProduct._id;
        return {
          text: `Opening up ${targetProduct.name} for you!`,
          actions: [{ action: "NAVIGATE_DETAIL", productId: targetProduct.id || targetProduct._id }],
@@ -812,17 +912,19 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
     }
   }
 
-  // 5. Visual color / attribute grounding in visible products
-  if (currentlyVisibleProducts && currentlyVisibleProducts.length > 0) {
-    const colors = ['red', 'blue', 'green', 'black', 'white', 'gold', 'silver', 'grey', 'gray', 'navy', 'pink', 'purple', 'yellow', 'orange', 'brown'];
-    for (const c of colors) {
-      if (new RegExp(`\\b${c}\\b`).test(lower)) {
+  // 8. Visual color / attribute grounding in visible products AND catalog
+  const colors = ['red', 'blue', 'green', 'black', 'white', 'gold', 'silver', 'grey', 'gray', 'navy', 'pink', 'purple', 'yellow', 'orange', 'brown'];
+  for (const c of colors) {
+    if (new RegExp(`\\b${c}\\b`).test(lower)) {
+      // Priority 1: Currently visible on screen
+      if (currentlyVisibleProducts && currentlyVisibleProducts.length > 0) {
         const found = currentlyVisibleProducts.find(p =>
           (p.color && p.color.toLowerCase().includes(c)) ||
           (Array.isArray(p.colors) && p.colors.some(col => String(col).toLowerCase().includes(c))) ||
           (p.name && p.name.toLowerCase().includes(c))
         );
         if (found) {
+          sessionContext.lastReferencedProduct = found.id || found._id;
           return {
             text: `Here's the ${c} one — ${found.name}!`,
             actions: [{ action: "NAVIGATE_DETAIL", productId: found.id || found._id }],
@@ -831,25 +933,85 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
           };
         }
       }
+
+      // Priority 2: In full catalog
+      if (catalogProducts && catalogProducts.length > 0) {
+        const catalogFound = catalogProducts.find(p =>
+          (p.color && p.color.toLowerCase().includes(c)) ||
+          (Array.isArray(p.colors) && p.colors.some(col => String(col).toLowerCase().includes(c))) ||
+          (p.name && p.name.toLowerCase().includes(c))
+        );
+        if (catalogFound) {
+          sessionContext.lastReferencedProduct = catalogFound.id || catalogFound._id;
+          return {
+            text: `Found the ${c} one for you — ${catalogFound.name}!`,
+            actions: [{ action: "NAVIGATE_DETAIL", productId: catalogFound.id || catalogFound._id }],
+            emotion: "excited",
+            language: "en"
+          };
+        }
+      }
     }
   }
 
-  // 6. Navigation Controls
+  // 9. Navigation Controls
   if (lower.match(/(back|previous|go back|take me back|revert back)/)) {
-    return { text: "Going back!", actions: [{ action: "NAVIGATE_BACK" }], emotion: "happy", language: "en" };
+    return { text: "Going back to your previous page!", actions: [{ action: "NAVIGATE_BACK" }], emotion: "happy", language: "en" };
   }
   if (lower.match(/(scroll|scroll down|scroll up)/)) {
     const dir = lower.match(/(up|top)/) ? 'up' : 'down';
-    return { text: "Scrolling " + dir, actions: [{ action: "SCROLL", direction: dir }], emotion: "happy", language: "en" };
-  }
-  if (lower.match(/(sort by price|cheapest|lowest price|sasta)/)) {
-    return { text: "Sorting by lowest price!", actions: [{ action: "SORT_PRODUCTS", sortBy: "price-asc" }], emotion: "happy", language: "en" };
+    return { text: "Scrolling " + dir + " for you!", actions: [{ action: "SCROLL", direction: dir }], emotion: "happy", language: "en" };
   }
   if (lower.match(/(close|stop|bye|sleep|goodbye|dismiss)/)) {
-    return { text: "Going to sleep! Call my name when you need me.", actions: [{ action: "SLEEP" }], emotion: "happy", language: "en" };
+    return { text: "Going to sleep! Just call my name when you need me.", actions: [{ action: "SLEEP" }], emotion: "happy", language: "en" };
   }
 
-  // 7. Standard Navigation Keywords
+  // 10. ORDER STATUS & TRACKING
+  if (lower.match(/(where is my order|where's my order|track order|my orders|order status|order history)/)) {
+    if (recentOrders && recentOrders.length > 0) {
+      const ord = recentOrders[0];
+      return {
+        text: `Your latest order (#${String(ord._id).slice(-6)}) is currently ${ord.status || 'Confirmed'}. Opening your orders page!`,
+        actions: [{ action: "NAVIGATE_ROUTE", path: "/orders" }],
+        emotion: "happy",
+        language: "en"
+      };
+    }
+    return {
+      text: "Opening your order history now!",
+      actions: [{ action: "NAVIGATE_ROUTE", path: "/orders" }],
+      emotion: "happy",
+      language: "en"
+    };
+  }
+
+  // 11. STORE POLICIES & FAQS
+  if (lower.match(/\b(return policy|returns|how to return|refund policy)\b/)) {
+    return {
+      text: "We offer a 30-day hassle-free luxury return policy with door-to-door complimentary pickup.",
+      actions: [],
+      emotion: "happy",
+      language: "en"
+    };
+  }
+  if (lower.match(/\b(shipping|delivery time|delivery charges|free shipping)\b/)) {
+    return {
+      text: "Complimentary luxury shipping is included on all orders over ₹999, arriving securely within 3-5 business days.",
+      actions: [],
+      emotion: "happy",
+      language: "en"
+    };
+  }
+  if (lower.match(/\b(authentic|real|genuine|original|fake)\b/)) {
+    return {
+      text: "Every piece at AMBIENCE is 100% brand-certified, verified authentic, and backed by our guarantee.",
+      actions: [],
+      emotion: "happy",
+      language: "en"
+    };
+  }
+
+  // 12. Standard Explicit Navigation Keywords
   let matchedPath = null;
   let matchedKeywordLen = 0;
   for (const [path, keywords] of Object.entries(NAV_KEYWORDS)) {
@@ -861,8 +1023,8 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
     }
   }
 
-  const navIntentMatch = lower.match(/(?:go to|open|take me to|navigate to|show me|view|page)/);
-  if (matchedPath && (navIntentMatch || matchedKeywordLen > 4)) {
+  const navIntentMatch = lower.match(/(?:go to|open|take me to|navigate to|visit|page)/);
+  if (matchedPath && navIntentMatch) {
     const pageName = matchedPath === '/' ? 'home' : matchedPath.replace(/\//g, ' ').trim();
     return {
       text: `Taking you to ${pageName}!`,
@@ -872,7 +1034,7 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
     };
   }
 
-  // 8. Catalog matching using CACHED catalog (zero DB overhead!)
+  // 13. Catalog matching using CACHED catalog (zero DB overhead!)
   try {
     const products = catalogProducts && catalogProducts.length > 0 ? catalogProducts : await getLiveCatalog();
     let exactProduct = null;
@@ -898,6 +1060,7 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
     }
 
     if (exactProduct) {
+      sessionContext.lastReferencedProduct = exactProduct._id || exactProduct.id;
       return {
         text: `Found it! Opening ${exactProduct.name}.`,
         actions: [{ action: "NAVIGATE_DETAIL", productId: exactProduct._id || exactProduct.id }],
@@ -907,6 +1070,7 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
     }
 
     if (matchedCategory) {
+      sessionContext.lastSearchQuery = matchedCategory;
       return {
         text: `Showing our best ${matchedCategory} collection!`,
         actions: [{ action: 'GLOBAL_SEARCH', query: matchedCategory }],
@@ -918,9 +1082,79 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
     console.warn('[Smart Fallback] Catalog match note:', err.message);
   }
 
-  // 9. Friendly conversational response
+  // 14. Persona-Aligned Social Greetings (Dynamic non-repetitive greetings)
+  if (lower.match(/\b(hi|hello|hey|yo|greetings|howdy|sup|good (morning|afternoon|evening))\b/)) {
+    if (companionPersona === 'energetic') {
+      const energeticGreetings = [
+        "Hey! Super hyped to have you here! What fire pieces are we checking out today? 🔥",
+        "Yo! Welcome back to AMBIENCE! Let's find you some incredible drip today! ⚡",
+        "Hey there! Ready to level up your style? Tell me what you're craving! 🚀"
+      ];
+      return {
+        text: energeticGreetings[(sessionContext.turnCount || 0) % energeticGreetings.length],
+        actions: [],
+        emotion: 'excited',
+        language: 'en'
+      };
+    } else if (companionPersona === 'mature') {
+      const matureGreetings = [
+        "Good day. Welcome to AMBIENCE Luxury Concierge. How may I assist your selections today?",
+        "Welcome. I am at your service to curate our finest timepieces, fashion, and accessories.",
+        "A pleasure to assist you. What collection or designer piece may I present today?"
+      ];
+      return {
+        text: matureGreetings[(sessionContext.turnCount || 0) % matureGreetings.length],
+        actions: [],
+        emotion: 'neutral',
+        language: 'en'
+      };
+    } else {
+      const jollyGreetings = [
+        "Hey there! Great to see you. What kind of luxury piece are we exploring today?",
+        "Hello! I'm right here with you. Looking for something special or just browsing the vault?",
+        "Hey! Welcome to AMBIENCE. From sleek timepieces to fresh fits, what can I pull up for you?"
+      ];
+      return {
+        text: jollyGreetings[(sessionContext.turnCount || 0) % jollyGreetings.length],
+        actions: [],
+        emotion: 'happy',
+        language: 'en'
+      };
+    }
+  }
+
+  // 15. Dynamic Contextual Fallthrough (Guarantees fresh, non-repetitive responses!)
+  const cartCount = Array.isArray(cartItems) ? cartItems.length : 0;
+  const onCartPage = currentPage && currentPage.includes('/cart');
+  const onDealsPage = currentPage && currentPage.includes('/deals');
+
+  if (onCartPage && cartCount > 0) {
+    return {
+      text: `You have ${cartCount} standout ${cartCount === 1 ? 'item' : 'items'} in your cart. Ready to proceed to checkout, or would you like to explore matching pieces?`,
+      actions: [],
+      emotion: 'happy',
+      language: 'en'
+    };
+  }
+
+  if (onDealsPage) {
+    return {
+      text: "You're viewing our exclusive Luxury Vault promotions! Let me know if you want to sort by lowest price or view specific categories.",
+      actions: [],
+      emotion: 'excited',
+      language: 'en'
+    };
+  }
+
+  const dynamicFallbacks = [
+    "I'm tuned in! Whether you're looking for iconic timepieces, designer kicks, or tailored fits, just tell me your vibe.",
+    "Got you covered! Tell me what style or occasion you have in mind and I'll curate our finest pieces.",
+    "Right here with you! Looking for something specific like luxury watches, modern streetwear, or fragrances today?",
+    "I can pull up our latest arrivals, filter by your preferred price, or manage your cart in a flash. Where shall we start?"
+  ];
+
   return {
-    text: "I'm right here with you! What kind of luxury piece or collection are you looking for today?",
+    text: dynamicFallbacks[(sessionContext.turnCount || 0) % dynamicFallbacks.length],
     actions: [],
     emotion: 'empathetic',
     language: 'en'
