@@ -304,6 +304,7 @@ function buildSystemPrompt({
   recentOrders,
   cartItems,
   currentPage,
+  pageContext,
   currentlyVisibleProducts,
   catalogProducts,
   isForFunctionCalling,
@@ -483,6 +484,21 @@ Output ONLY a raw JSON object:
 }
 `;
 
+  // Build screen-aware context string from pageContext (if available)
+  let screenAwareness = '';
+  if (pageContext && typeof pageContext === 'object') {
+    const parts = [];
+    if (pageContext.pageType) parts.push(`Page Type: ${pageContext.pageType}`);
+    if (pageContext.searchQuery) parts.push(`Active Search: "${pageContext.searchQuery}"`);
+    if (pageContext.appliedFilters?.active?.length > 0) parts.push(`Active Filters: ${pageContext.appliedFilters.active.join(', ')}`);
+    if (pageContext.sortOrder) parts.push(`Sort: ${pageContext.sortOrder}`);
+    if (pageContext.productCount > 0) parts.push(`Products on Screen: ${pageContext.productCount}`);
+    if (pageContext.cartItemCount > 0) parts.push(`Cart Items: ${pageContext.cartItemCount}`);
+    if (pageContext.viewingProduct) parts.push(`Viewing: ${pageContext.viewingProduct.name} (${pageContext.viewingProduct.brand}, ${pageContext.viewingProduct.price})`);
+    if (pageContext.scrollPosition > 0) parts.push(`Scroll: ${pageContext.scrollPosition}% down`);
+    if (parts.length > 0) screenAwareness = `\n\n═══ SCREEN AWARENESS ═══\n${parts.join('\n')}\nUse this context to give precise, relevant answers about what the user is currently seeing.`;
+  }
+
   const userContext = `
 ═══ USER CONTEXT ═══
 User: ${userName}
@@ -496,7 +512,7 @@ Detected Input Language: ${detectedLang}
 ═══ CURRENTLY VISIBLE ON SCREEN ═══
 ${visibleContext}
 ${memoryContext}
-${catalogContext}`;
+${catalogContext}${screenAwareness}`;
 
   return corePersona + (isForFunctionCalling ? functionCallingInstructions : textOnlyInstructions) + userContext;
 }
@@ -520,6 +536,7 @@ exports.chat = async (req, res) => {
     const {
       conversationHistory = [],
       currentPage,
+      pageContext,
       cartItems = [],
       language,
       personality,
@@ -567,7 +584,7 @@ exports.chat = async (req, res) => {
     // ── Shared prompt context ─────────────────────────────────────────────────
     const promptContext = {
       userName, userPreferredLang, detectedLang, user, recentOrders,
-      cartItems, currentPage, currentlyVisibleProducts, catalogProducts,
+      cartItems, currentPage, pageContext, currentlyVisibleProducts, catalogProducts,
       companionPersona, sessionContext
     };
 

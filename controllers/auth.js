@@ -669,6 +669,65 @@ exports.googleLogin = async (req, res) => {
 // Apple Sign-In sends an identity token (JWT) that we verify.
 // On first login, Apple also sends user info (name, email) in the 'user' field.
 // ═══════════════════════════════════════════════════════════════════════════════
+// ── Apple JWKS cache for ID token signature verification ──────────────────
+let _appleJWKSCache = null;
+let _appleJWKSCacheExpiry = 0;
+const APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys";
+const APPLE_JWKS_TTL = 3600000; // 1 hour cache
+
+/**
+ * Fetch and cache Apple's public keys (JWKS).
+ * Returns an array of JWK objects.
+ */
+async function getApplePublicKeys() {
+  const now = Date.now();
+  if (_appleJWKSCache && now < _appleJWKSCacheExpiry) {
+    return _appleJWKSCache;
+  }
+  try {
+    const res = await fetch(APPLE_JWKS_URL);
+    if (!res.ok) throw new Error(`Apple JWKS fetch failed: ${res.status}`);
+    const data = await res.json();
+    _appleJWKSCache = data.keys || [];
+    _appleJWKSCacheExpiry = now + APPLE_JWKS_TTL;
+    return _appleJWKSCache;
+  } catch (err) {
+    console.error("[AMBIENCE] ⚠ Failed to fetch Apple JWKS:", err.message);
+    // Return cache if available even if expired (graceful degradation)
+    if (_appleJWKSCache) return _appleJWKSCache;
+    throw err;
+  }
+}
+
+/**
+ * Verify an Apple ID token's signature against Apple's published public keys.
+ * Uses Node.js crypto.createPublicKey() with JWK input (Node 15.12+).
+ * Falls back to jwt.decode() if JWKS fetch fails (non-production).
+ */
+async function verifyAppleIdToken(idToken) {
+  // Decode header to find the key ID (kid)
+  const header = jwt.decode(idToken, { complete: true })?.header;
+  if (!header || !header.kid) {
+    throw new Error("Apple ID token has no key ID (kid) in header.");
+  }
+
+  const keys = await getApplePublicKeys();
+  const matchingKey = keys.find(k => k.kid === header.kid);
+  if (!matchingKey) {
+    throw new Error(`No Apple public key found for kid: ${header.kid}`);
+  }
+
+  // Convert JWK to PEM using Node.js built-in crypto (Node 15.12+)
+  const publicKey = crypto.createPublicKey({ key: matchingKey, format: "jwk" });
+
+  // Verify the JWT signature + standard claims
+  return jwt.verify(idToken, publicKey, {
+    algorithms: ["RS256"],
+    issuer: "https://appleid.apple.com",
+    // audience is the Apple Services ID / App ID — skip if not configured
+  });
+}
+
 exports.appleLogin = async (req, res) => {
   const { idToken, user: appleUser } = req.body;
 
@@ -677,10 +736,22 @@ exports.appleLogin = async (req, res) => {
   }
 
   try {
-    // Decode the Apple ID token (JWT)
-    // In production, you should verify the token signature against Apple's public keys
-    // at https://appleid.apple.com/auth/keys using jsonwebtoken.verify()
-    const decoded = jwt.decode(idToken);
+    // ── Verify Apple ID token signature against Apple's JWKS ──────────────
+    // This prevents forged tokens — Apple's RS256 signature is checked
+    // against their published public keys at appleid.apple.com/auth/keys.
+    let decoded;
+    try {
+      decoded = await verifyAppleIdToken(idToken);
+    } catch (verifyErr) {
+      console.error("[AMBIENCE] ⚠ Apple token verification failed:", verifyErr.message);
+      // In development, fall back to decode-only with a warning
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[AMBIENCE] ⚠ DEV FALLBACK: Using jwt.decode() without verification");
+        decoded = jwt.decode(idToken);
+      } else {
+        return res.status(401).json({ success: false, error: "Apple ID token verification failed." });
+      }
+    }
     
     if (!decoded || !decoded.sub) {
       return res.status(401).json({ success: false, error: "Invalid Apple ID token." });
