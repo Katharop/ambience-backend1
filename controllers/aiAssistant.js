@@ -107,6 +107,84 @@ function sanitizeUserPrompt(text) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// SPEECH TRANSCRIPT NORMALIZER (SERVER-SIDE)
+// ══════════════════════════════════════════════════════════════════════════════
+// Fixes common speech-to-text artifacts, missing prepositions, run-together
+// words, contractions, and informal phrasing. Applied to messages that bypass
+// Tier 1 and go directly to the backend AI pipeline.
+// ══════════════════════════════════════════════════════════════════════════════
+function normalizeTranscript(text) {
+  if (!text || typeof text !== 'string') return text || '';
+  let t = text.toLowerCase();
+
+  // Expand contractions
+  const contractions = [
+    [/\bwanna\b/g, 'want to'],
+    [/\bgonna\b/g, 'going to'],
+    [/\blemme\b/g, 'let me'],
+    [/\bgimme\b/g, 'give me'],
+    [/\bgotta\b/g, 'got to'],
+    [/\bkinda\b/g, 'kind of'],
+    [/\bsorta\b/g, 'sort of'],
+    [/\bdunno\b/g, "don't know"],
+    [/\bima\b/g, 'i am going to'],
+    [/\bi'ma\b/g, 'i am going to'],
+    [/\bimma\b/g, 'i am going to'],
+  ];
+  for (const [pat, rep] of contractions) t = t.replace(pat, rep);
+
+  // Insert missing prepositions
+  const prepFixes = [
+    [/\b(go|get|navigate|head|jump|switch)\s+(shop|cart|home|deals|checkout|orders|profile|settings|categories)\b/g, '$1 to $2'],
+    [/\b(take me|bring me|get me)\s+(shop|cart|home|deals|checkout|orders|profile|settings|categories)\b/g, '$1 to $2'],
+    [/\b(go|navigate|head)\s+the\s+/g, '$1 to the '],
+    [/\badd\s+cart\b/g, 'add to cart'],
+    [/\badd\s+my\s+cart\b/g, 'add to my cart'],
+    [/\bput\s+cart\b/g, 'put in cart'],
+    [/\bremove\s+cart\b/g, 'remove from cart'],
+  ];
+  for (const [pat, rep] of prepFixes) t = t.replace(pat, rep);
+
+  // Fix run-together words
+  const runTogether = [
+    [/\bgotopage\b/g, 'go to page'],
+    [/\bgotoshop\b/g, 'go to shop'],
+    [/\bgotocart\b/g, 'go to cart'],
+    [/\baddtocart\b/g, 'add to cart'],
+    [/\bshoppage\b/g, 'shop page'],
+    [/\bcartpage\b/g, 'cart page'],
+    [/\bhomepage\b/g, 'home page'],
+  ];
+  for (const [pat, rep] of runTogether) t = t.replace(pat, rep);
+
+  // Common STT phonetic misspellings
+  const phoneticFixes = [
+    [/\blabdop\b/g, 'laptop'], [/\blabtop\b/g, 'laptop'], [/\blaptob\b/g, 'laptop'],
+    [/\blap top\b/g, 'laptop'], [/\bsmartfone\b/g, 'smartphone'],
+    [/\bpurfume\b/g, 'perfume'], [/\bperfum\b/g, 'perfume'],
+    [/\bcosmatic\b/g, 'cosmetics'], [/\bjewlery\b/g, 'jewelry'],
+    [/\bsneeker\b/g, 'sneaker'], [/\bsneekers\b/g, 'sneakers'],
+    [/\belectonics\b/g, 'electronics'], [/\bacessories\b/g, 'accessories'],
+  ];
+  for (const [pat, rep] of phoneticFixes) t = t.replace(pat, rep);
+
+  // Informal shopping phrases → standard intent
+  const informal = [
+    [/\bi'll take it\b/g, 'add to cart'],
+    [/\bi'll take this\b/g, 'add to cart'],
+    [/\bi'll have it\b/g, 'add to cart'],
+    [/\bi want this one\b/g, 'add to cart'],
+    [/\bbag it\b/g, 'add to cart'],
+    [/\bget this for me\b/g, 'add to cart'],
+    [/\bget rid of\b/g, 'remove from cart'],
+    [/\btake it out\b/g, 'remove from cart'],
+  ];
+  for (const [pat, rep] of informal) t = t.replace(pat, rep);
+
+  return t.replace(/\s+/g, ' ').trim();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -274,6 +352,24 @@ Session Turn Count: ${sessionContext.turnCount || 0}
 █ MULTI-DIALECT ENGLISH & GLOBAL SLANG INTELLIGENCE
 ════════════════════════════════════════════════════════════════════
 You seamlessly understand varied English dialects, accents, colloquial phrasing, and casual shopping slang:
+
+CRITICAL SPEECH-TO-TEXT TOLERANCE:
+You MUST handle broken grammar, missing prepositions, and speech recognition errors gracefully.
+Examples you MUST understand correctly:
+  "go shop page" → Navigate to /shop (missing "to")
+  "take me shop" → Navigate to /shop (missing "to")
+  "add cart" → Add to cart (missing "to")
+  "show me labdop" → Search for laptops (phonetic misspelling)
+  "i want to see the purfume" → Search for perfumes
+  "remove cart" → Remove from cart (missing "from")
+  "get me to shopping" → Navigate to /shop
+  "what shoes you got" → Search for shoes
+  "lemme see watches" → Search for watches
+  "put that thing in my cart please" → Add to cart
+  "nah remove it" → Remove from cart
+  "actually no take it out" → Remove from cart
+Never ask the user to repeat or rephrase if the intent is reasonably clear.
+
 • AMERICAN ENGLISH:
   - "cop that" / "cop this" / "grab me those" / "toss in my cart" / "throw that in my bag" → Add to cart!
   - "drip" / "fit" / "threads" → Stylish apparel/fashion
@@ -418,6 +514,9 @@ exports.chat = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Message is required.' });
     }
 
+    // Apply transcript normalization to fix STT errors, missing prepositions, slang
+    const normalizedMessage = normalizeTranscript(cleanMessage);
+
     const {
       conversationHistory = [],
       currentPage,
@@ -481,7 +580,7 @@ exports.chat = async (req, res) => {
       }));
 
     // ── Tier 2: Gemini 2.0 Flash with NATIVE FUNCTION CALLING (PRIMARY) ─────
-    const geminiResult = await tryGeminiFunctionCalling(promptContext, cleanMessage, formattedHistory);
+    const geminiResult = await tryGeminiFunctionCalling(promptContext, normalizedMessage, formattedHistory);
     if (geminiResult) {
       console.log('[Ambience AI] 🧠 Gemini 2.0 Flash (Function Calling) — Success');
       updateSessionFromActions(sessionId, sessionContext, geminiResult.actions, currentlyVisibleProducts);
@@ -490,7 +589,7 @@ exports.chat = async (req, res) => {
 
     // ── Tier 3: Groq Cloud (Llama 3.3 70B) — text-only fallback ─────────────
     const systemPromptText = buildSystemPrompt({ ...promptContext, isForFunctionCalling: false });
-    const groqResult = await tryGroq(systemPromptText, cleanMessage, formattedHistory);
+    const groqResult = await tryGroq(systemPromptText, normalizedMessage, formattedHistory);
     if (groqResult) {
       console.log('[Ambience AI] 🚀 Groq (Llama 3.3 70B) — Fallback Success');
       updateSessionFromActions(sessionId, sessionContext, groqResult.actions, currentlyVisibleProducts);
@@ -500,7 +599,7 @@ exports.chat = async (req, res) => {
     // ── Tier 4: Smart product-aware fallback (LOCAL & FAST) ───────────────────
     console.log('[Ambience AI] ⚠️ All external APIs unavailable — smart local fallback.');
     const lang = detectedLang === 'ta' ? 'tamil' : detectedLang === 'ml' ? 'malayalam' : detectedLang === 'hi' ? 'hindi' : 'english';
-    const smartFallback = await buildSmartFallback(cleanMessage, lang, currentlyVisibleProducts, catalogProducts, sessionContext, promptContext);
+    const smartFallback = await buildSmartFallback(normalizedMessage, lang, currentlyVisibleProducts, catalogProducts, sessionContext, promptContext);
     updateSessionFromActions(sessionId, sessionContext, smartFallback.actions, currentlyVisibleProducts);
     return res.json({ success: true, response: normalizeResponse(smartFallback) });
 

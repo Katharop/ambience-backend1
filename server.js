@@ -728,7 +728,7 @@ app.put("/api/users/2fa", protect, async (req, res) => {
 
 // ── AI Assistant Routes ─────────────────────────────────────────────────────
 app.post("/api/ai/chat", aiChatLimiter, optionalAuth, aiAssistantController.chat);
-app.post("/api/ai/tts", aiAssistantController.getTTSConfig);
+app.post("/api/ai/tts", aiChatLimiter, aiAssistantController.getTTSConfig);
 
 // ── Create Support Ticket ───────────────────────────────────────────────────
 app.post("/api/support", protect, async (req, res) => {
