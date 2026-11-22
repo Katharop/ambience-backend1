@@ -16,7 +16,7 @@ const functionDeclarations = [
 
 VALID ROUTES (use exact strings):
   "/" → Home page
-  "/shop" → Shop (all products)
+  "/shop" → Shop (all products, the store, shopping section, where the products are)
   "/shop/mens" → Men's fashion
   "/shop/womens" → Women's fashion
   "/shop/electronics" → Electronics (phones, laptops, tablets, gadgets)
@@ -28,10 +28,16 @@ VALID ROUTES (use exact strings):
   "/cart" → Shopping cart
   "/checkout" → Checkout / payment page
   "/orders" → Order history / tracking
-  "/deals" → Deals, promotions, flash sales
+  "/deals" → Deals, promotions, flash sales (where the deals/sales are)
   "/categories" → Category directory
   "/profile" → User profile
   "/settings" → Account settings & preferences
+
+NATURAL ENGLISH NAVIGATION EXAMPLES (all map to "/shop"):
+  "Go shop page" / "Go shopping page" / "Can you go shop page?" / "Can you go to shop page?"
+  "Take me go shop page" / "Take me to shopping" / "I want go shop" / "I wanna go shopping page"
+  "Open shop" / "Get me to the shop" / "Let's go to the shopping section" / "Can we open the store?"
+  "I need to see the products" / "Take me where the products are" / "Move me to shop page" / "Browse the store"
 
 MULTILINGUAL TRIGGER EXAMPLES:
   "shop page" / "ஷாப் பேஜ்" / "சாப்ட் பேஜ்" / "शॉप पेज" / "கடைக்கு போ" → "/shop"
@@ -39,7 +45,7 @@ MULTILINGUAL TRIGGER EXAMPLES:
   "go home" / "ஹோம் பேஜ்" / "होम पेज" → "/"
   "men's page" / "ஆண்கள் பேஜ்" → "/shop/mens"
 
-CRITICAL: If user says anything containing "page"/"பேஜ்"/"पेज" + a location name, it is ALWAYS navigation, NEVER a product search. "shop page" = navigate to /shop, NOT search for shirts.`,
+CRITICAL: If the user asks to go somewhere, visit a section, or open a store/page/catalog (including "where the products are", "take me to shopping", "open shop"), it is ALWAYS navigation (navigateTo), NEVER a product search.`,
     parameters: {
       type: "OBJECT",
       properties: {
@@ -73,7 +79,7 @@ PRODUCT TYPE MAPPING (user intent → query):
   headphones/ஹெட்ஃபோன்/हेडफोन/airpods → "headphones"
 
 DO NOT use this for specific products (use viewProduct instead).
-DO NOT use this when user says "go to shop" — that's navigation, not search.`,
+CRITICAL: DO NOT use this when user says "go to shop", "shop page", "where the products are", "see the products", "open the store", "shopping section", "take me to shopping", "deals page", "cart" — that is ALWAYS navigation (navigateTo), never searchProducts.`,Target:
     parameters: {
       type: "OBJECT",
       properties: {
@@ -345,7 +351,7 @@ AMOUNT MAPPING:
   // ── GO BACK ────────────────────────────────────────────────────────────────
   {
     name: "goBack",
-    description: `Go to the previous page (browser back). Use when user says "go back" / "previous" / "back previous page" / "go back previous" / "பின்னால போ" / "back-ku po" / "पीछे जाओ" / "back போ" / "navigate back".`,
+    description: `Go to the previous page (browser back). Use when user says "go back" / "take me back" / "return to the previous page" / "move back to the last page" / "i wanna go previous page" / "get me out of here" / "take me out of here" / "previous" / "back previous page" / "go back previous" / "பின்னால போ" / "back-ku po" / "पीछे जाओ" / "back போ" / "navigate back".`,
     parameters: {
       type: "OBJECT",
       properties: {},

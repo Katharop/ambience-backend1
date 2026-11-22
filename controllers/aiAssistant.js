@@ -133,10 +133,32 @@ function normalizeTranscript(text) {
   ];
   for (const [pat, rep] of contractions) t = t.replace(pat, rep);
 
+  // Expand compound verbs and colloquial navigation requests
+  t = t.replace(/\btake me go\b/g, 'go to');
+  t = t.replace(/\bcan you go\b/g, 'go to');
+  t = t.replace(/\bcan we open\b/g, 'open');
+  t = t.replace(/\bi want go\b/g, 'go to');
+  t = t.replace(/\bi wanna go\b/g, 'go to');
+  t = t.replace(/\blet's go\b/g, 'go to');
+  t = t.replace(/\bmove me to\b/g, 'go to');
+  t = t.replace(/\bmove me\b/g, 'go to');
+
+  // Normalize place expressions
+  t = t.replace(/\bwhere the products are\b/g, 'shop page');
+  t = t.replace(/\bwhere products are\b/g, 'shop page');
+  t = t.replace(/\bwhere the deals are\b/g, 'deals page');
+  t = t.replace(/\bwhere deals are\b/g, 'deals page');
+  t = t.replace(/\bget me out of here\b/g, 'go back');
+  t = t.replace(/\btake me out of here\b/g, 'go back');
+  t = t.replace(/\bi need to see the products\b/g, 'go to shop page');
+  t = t.replace(/\bsee the products\b/g, 'go to shop page');
+  t = t.replace(/\bthe store\b/g, 'the shop');
+  t = t.replace(/\bshopping section\b/g, 'shop page');
+
   // Insert missing prepositions
   const prepFixes = [
-    [/\b(go|get|navigate|head|jump|switch)\s+(shop|cart|home|deals|checkout|orders|profile|settings|categories)\b/g, '$1 to $2'],
-    [/\b(take me|bring me|get me)\s+(shop|cart|home|deals|checkout|orders|profile|settings|categories)\b/g, '$1 to $2'],
+    [/\b(go|get|navigate|head|jump|switch)\s+(shop|shopping|cart|home|deals|checkout|orders|profile|settings|categories)\b/g, '$1 to $2'],
+    [/\b(take me|bring me|get me)\s+(shop|shopping|cart|home|deals|checkout|orders|profile|settings|categories)\b/g, '$1 to $2'],
     [/\b(go|navigate|head)\s+the\s+/g, '$1 to the '],
     [/\badd\s+cart\b/g, 'add to cart'],
     [/\badd\s+my\s+cart\b/g, 'add to my cart'],
@@ -879,14 +901,21 @@ const PRODUCT_KEYWORDS = {
 };
 
 const NAVIGATION_PHONETIC_OVERRIDES = [
-  { patterns: ['shop page', 'shop go', 'go to shop', 'open shop', 'show shop', 'browse shop', 'கடைக்கு போ', 'शॉप पेज'], route: '/shop' },
+  { patterns: [
+    'shop page', 'shop go', 'go to shop', 'open shop', 'show shop', 'browse shop', 'கடைக்கு போ', 'शॉप पेज',
+    'go shop page', 'go shopping page', 'can you go shop page', 'can you go to shop page',
+    'take me go shop page', 'take me to shopping', 'take me to shop', 'i want go shop', 'i wanna go shopping page',
+    'get me to the shop', 'shopping section', 'can we open the store', 'open the store', 'open store',
+    'i need to see the products', 'take me where the products are', 'where the products are', 'where products are',
+    'move me to shop page', 'move me to shop', 'see the products'
+  ], route: '/shop' },
   { patterns: ['cart page', 'cart go', 'go to cart', 'open cart', 'view cart', 'show cart', 'my cart', 'கார்ட் பேஜ்', 'कार्ट पेज'], route: '/cart' },
-  { patterns: ['deals page', 'deals go', 'go to deals', 'open deals', 'show deals', 'offers page', 'luxury vault', 'டீல்ஸ் பேஜ்'], route: '/deals' },
+  { patterns: ['deals page', 'deals go', 'go to deals', 'open deals', 'show deals', 'offers page', 'luxury vault', 'டீல்ஸ் பேஜ்', 'where the deals are', 'where deals are'], route: '/deals' },
   { patterns: ['categories page', 'category page', 'show categories', 'open categories', 'directory'], route: '/categories' },
   { patterns: ['account page', 'profile page', 'go to account', 'go to profile', 'open account', 'open profile', 'my account'], route: '/profile' },
   { patterns: ['orders page', 'my orders', 'order history', 'track orders', 'tracking page'], route: '/orders' },
   { patterns: ['checkout page', 'go to checkout', 'checkout go', 'proceed to checkout', 'buy now page'], route: '/checkout' },
-  { patterns: ['home page', 'go home', 'go to home', 'main page', 'landing page', 'ஹோம் பேஜ்', 'होम पेज'], route: '/' },
+  { patterns: ['home page', 'go home', 'go to home', 'main page', 'landing page', 'ஹோம் பேஜ்', 'होम पेज', 'go the home', 'take me home'], route: '/' },
   { patterns: ['mens page', "men's page", 'go to mens', 'men page', 'menswear', 'men clothing'], route: '/shop/mens' },
   { patterns: ['womens page', "women's page", 'go to womens', 'women page', 'womenswear', 'women clothing'], route: '/shop/womens' },
   { patterns: ['footwear page', 'shoes page', 'sneakers page'], route: '/shop/footwear' },
@@ -1138,7 +1167,7 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
   }
 
   // 9. Navigation Controls
-  if (lower.match(/(back|previous|go back|take me back|revert back|back previous|navigate back)/)) {
+  if (lower.match(/(back|previous|go back|take me back|revert back|back previous|navigate back|return to the previous|move back to the last|go previous|get me out of here|take me out of here)/)) {
     return { text: "Going back to your previous page!", actions: [{ action: "NAVIGATE_BACK" }], emotion: "happy", language: "en" };
   }
   if (lower.match(/(scroll|scroll down|scroll up|continue down|show more|keep going|keep scrolling)/)) {
@@ -1279,6 +1308,39 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
     }
   } catch (err) {
     console.warn('[Smart Fallback] Catalog match note:', err.message);
+  }
+
+  // 13b. Local NLP Intent & Entity Resolution
+  try {
+    const localIntent = localNLP.classifyIntent(lower);
+    const entities = localNLP.extractEntities(lower);
+
+    if (localIntent === 'NAVIGATE' && entities.category) {
+      return {
+        text: `Navigating to our ${entities.category} collection!`,
+        actions: [{ action: 'GLOBAL_SEARCH', query: entities.category }],
+        emotion: 'excited',
+        language: 'en'
+      };
+    }
+    if (localIntent === 'PRICE_FILTER' && entities.maxPrice) {
+      return {
+        text: `Filtering pieces under ₹${Number(entities.maxPrice).toLocaleString('en-IN')}!`,
+        actions: [{ action: 'FILTER_BUDGET', maxPrice: entities.maxPrice }],
+        emotion: 'happy',
+        language: 'en'
+      };
+    }
+    if (localIntent === 'ORDER_STATUS') {
+      return {
+        text: "Taking you to your orders so you can track your deliveries!",
+        actions: [{ action: 'NAVIGATE_ROUTE', path: '/orders' }],
+        emotion: 'happy',
+        language: 'en'
+      };
+    }
+  } catch (nlpErr) {
+    console.warn('[Smart Fallback] LocalNLP note:', nlpErr.message);
   }
 
   // 14. Persona-Aligned Social Greetings (Dynamic non-repetitive greetings)
