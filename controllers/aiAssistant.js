@@ -30,8 +30,8 @@ async function getLiveCatalog() {
   catalogFetchPromise = (async () => {
     try {
       const prods = await Product.find({ status: 'live' })
-        .select('name brand category retailPrice dealPrice description tags _id imageUrl imageUrls colors')
-        .limit(120)
+        .select('name brand category subcategory retailPrice dealPrice description tags _id imageUrl imageUrls colors colorVariants sizeVariants stock isStockTracked ratingsAverage ratingsQuantity')
+        .limit(200)
         .lean();
       cachedCatalog = prods || [];
       cachedCatalogTime = Date.now();
@@ -280,16 +280,51 @@ function enrichProductWithType(product) {
       break;
     }
   }
-  return {
+
+  // Calculate discount percentage if both prices exist
+  const retailPrice = product.retailPrice || 0;
+  const dealPrice = product.dealPrice || retailPrice;
+  const discountPct = retailPrice > 0 && dealPrice < retailPrice
+    ? Math.round(((retailPrice - dealPrice) / retailPrice) * 100)
+    : 0;
+
+  const enriched = {
     _id: product._id,
     name: product.name,
     brand: product.brand,
     category: product.category,
     productType,
-    price: product.dealPrice || product.retailPrice,
+    price: dealPrice || retailPrice,
+    retailPrice: retailPrice || undefined,
+    discount: discountPct > 0 ? `${discountPct}% off` : undefined,
     colors: product.colors || [],
-    description: (product.description || '').slice(0, 100)
+    description: (product.description || '').slice(0, 150),
+    imageUrl: product.imageUrl || (product.imageUrls && product.imageUrls[0]) || '',
   };
+
+  // Include stock status if tracked
+  if (product.isStockTracked) {
+    enriched.inStock = (product.stock || 0) > 0;
+    enriched.stockQty = product.stock || 0;
+  }
+
+  // Include available sizes if present
+  if (Array.isArray(product.sizeVariants) && product.sizeVariants.length > 0) {
+    enriched.sizes = product.sizeVariants.map(s => s.label);
+  }
+
+  // Include available color variants if present
+  if (Array.isArray(product.colorVariants) && product.colorVariants.length > 0) {
+    enriched.colorOptions = product.colorVariants.map(cv => cv.name);
+  }
+
+  // Include ratings if available
+  if (product.ratingsAverage && product.ratingsQuantity > 0) {
+    enriched.rating = product.ratingsAverage;
+    enriched.reviewCount = product.ratingsQuantity;
+  }
+
+  return enriched;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -324,7 +359,20 @@ ${JSON.stringify(enriched)}`;
   let visibleContext = 'No products are currently visible on the user\'s screen.';
   if (currentlyVisibleProducts && currentlyVisibleProducts.length > 0) {
     visibleContext = `The user is currently looking at these ${currentlyVisibleProducts.length} products on their screen (ordered by position, 0-indexed):
-${currentlyVisibleProducts.map((p, i) => `[${i}] ${p.name} — Brand: ${p.brand || 'N/A'} — Color: ${p.color || (p.colors && p.colors[0]) || 'N/A'} — ID: ${p.id || p._id} — Price: ${p.price || 'N/A'} — Category: ${p.category || 'N/A'}`).join('\n')}
+${currentlyVisibleProducts.map((p, i) => {
+  const parts = [`[${i}] ${p.name}`];
+  if (p.brand) parts.push(`Brand: ${p.brand}`);
+  if (p.color || (p.colors && p.colors[0])) parts.push(`Color: ${p.color || p.colors[0]}`);
+  parts.push(`ID: ${p.id || p._id}`);
+  if (p.price) parts.push(`Price: ${p.price}`);
+  if (p.discount) parts.push(`Discount: ${p.discount}`);
+  if (p.category) parts.push(`Category: ${p.category}`);
+  if (p.rating) parts.push(`Rating: ${p.rating}★`);
+  if (p.inStock === false) parts.push(`OUT OF STOCK`);
+  if (Array.isArray(p.sizes) && p.sizes.length > 0) parts.push(`Sizes: ${p.sizes.join(', ')}`);
+  if (Array.isArray(p.colorOptions) && p.colorOptions.length > 0) parts.push(`Color Options: ${p.colorOptions.join(', ')}`);
+  return parts.join(' — ');
+}).join('\n')}
 
 POSITIONAL & VISUAL COMMAND RULES:
 • "the first one" / "1st" / "top one" / "முதல்" / "पहला" → position [0]
@@ -411,6 +459,25 @@ If the reference is ambiguous between 2 items, clarify warmly: e.g., "Did you me
 When the user gives a broad or open-ended request (e.g., "I need shoes", "show me gifts under 5000", "what should I wear?"):
 1. Proactively highlight 2-3 standout recommendations from the live inventory.
 2. Ask a brief, engaging clarification question (e.g., "Are you feeling sleek formal leather, or high-energy streetwear kicks?").
+
+════════════════════════════════════════════════════════════════════
+█ SIMILARITY & "SHOW ANOTHER" RESOLUTION
+════════════════════════════════════════════════════════════════════
+When the user asks for similar items ("show another one", "show me something similar", "anything like this", "show other one", "what else do you have"):
+1. Identify the LAST REFERENCED product from session memory or current page.
+2. Use its productType/category/brand to search the inventory for alternatives.
+3. Call showSimilar(query) with the appropriate product category.
+If no product context exists, ask what kind of product they want to see.
+
+════════════════════════════════════════════════════════════════════
+█ SCROLL AMOUNT INTELLIGENCE
+════════════════════════════════════════════════════════════════════
+When the user says "scroll a little down", "slightly down", "just a bit", "nudge down":
+→ Call scrollPage with direction="down", amount="small"
+When the user says "scroll down", "continue down", "show more", "keep going":
+→ Call scrollPage with direction="down" (normal amount)
+When the user says "go to top", "back to top", "return to top":
+→ Call scrollPage with direction="top"
 
 ════════════════════════════════════════════════════════════════════
 █ STRICT ACTION SAFETY & PAYMENT GUARDRAIL
@@ -1071,12 +1138,28 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
   }
 
   // 9. Navigation Controls
-  if (lower.match(/(back|previous|go back|take me back|revert back)/)) {
+  if (lower.match(/(back|previous|go back|take me back|revert back|back previous|navigate back)/)) {
     return { text: "Going back to your previous page!", actions: [{ action: "NAVIGATE_BACK" }], emotion: "happy", language: "en" };
   }
-  if (lower.match(/(scroll|scroll down|scroll up)/)) {
+  if (lower.match(/(scroll|scroll down|scroll up|continue down|show more|keep going|keep scrolling)/)) {
     const dir = lower.match(/(up|top)/) ? 'up' : 'down';
-    return { text: "Scrolling " + dir + " for you!", actions: [{ action: "SCROLL", direction: dir }], emotion: "happy", language: "en" };
+    const isSmall = lower.match(/(a little|a bit|slightly|nudge|little)/) ? 'small' : 'normal';
+    return { text: "Scrolling " + dir + " for you!", actions: [{ action: "SCROLL", direction: dir, amount: isSmall }], emotion: "happy", language: "en" };
+  }
+  // 9b. "Show another one" / "show something similar" — resolve from session context
+  if (lower.match(/(show (another|other) one|show me (another|something similar|something else|alternatives)|more like this|anything else like this|what else|suggest similar)/)) {
+    let searchType = 'products';
+    if (lastReferencedItem) {
+      searchType = lastReferencedItem.category || lastReferencedItem.productType || 'products';
+    } else if (sessionContext.lastSearchQuery) {
+      searchType = sessionContext.lastSearchQuery;
+    }
+    return {
+      text: `Showing more ${searchType} for you!`,
+      actions: [{ action: "GLOBAL_SEARCH", query: searchType }],
+      emotion: "excited",
+      language: "en"
+    };
   }
   if (lower.match(/(close|stop|bye|sleep|goodbye|dismiss)/)) {
     return { text: "Going to sleep! Just call my name when you need me.", actions: [{ action: "SLEEP" }], emotion: "happy", language: "en" };

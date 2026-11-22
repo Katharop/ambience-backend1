@@ -304,7 +304,15 @@ If only 1 product matches, call viewProduct instead for instant precision routin
   // ── SCROLL PAGE ────────────────────────────────────────────────────────────
   {
     name: "scrollPage",
-    description: `Scroll the page up or down. Use when user says "scroll down" / "கீழே போ" / "नीचे जाओ" / "go to top" / "scroll pannu".`,
+    description: `Scroll the page up or down. Use when user says "scroll down" / "கீழே போ" / "नीचे जाओ" / "go to top" / "scroll pannu" / "scroll a little" / "continue down" / "show more" / "keep going".
+
+AMOUNT MAPPING:
+  "scroll down" / "continue down" / "show more" / "keep going" → direction: "down" (normal scroll)
+  "scroll up" / "go up" → direction: "up" (normal scroll)
+  "scroll a little down" / "bit down" / "nudge down" / "slightly down" → direction: "down", amount: "small"
+  "scroll a little up" / "bit up" → direction: "up", amount: "small"
+  "go to top" / "back to top" / "return to top" → direction: "top"
+  "go to bottom" / "scroll to bottom" → direction: "bottom"`,
     parameters: {
       type: "OBJECT",
       properties: {
@@ -312,6 +320,11 @@ If only 1 product matches, call viewProduct instead for instant precision routin
           type: "STRING",
           enum: ["up", "down", "top", "bottom"],
           description: "'up' = scroll up, 'down' = scroll down, 'top' = jump to page top, 'bottom' = jump to page bottom."
+        },
+        amount: {
+          type: "STRING",
+          enum: ["normal", "small"],
+          description: "'normal' (default) = standard scroll. 'small' = gentle scroll for 'a little' / 'slightly' / 'a bit' requests."
         }
       },
       required: ["direction"]
@@ -332,11 +345,29 @@ If only 1 product matches, call viewProduct instead for instant precision routin
   // ── GO BACK ────────────────────────────────────────────────────────────────
   {
     name: "goBack",
-    description: `Go to the previous page (browser back). Use when user says "go back" / "previous" / "பின்னால போ" / "back-ku po" / "पीछे जाओ" / "back போ".`,
+    description: `Go to the previous page (browser back). Use when user says "go back" / "previous" / "back previous page" / "go back previous" / "பின்னால போ" / "back-ku po" / "पीछे जाओ" / "back போ" / "navigate back".`,
     parameters: {
       type: "OBJECT",
       properties: {},
       required: []
+    }
+  },
+
+  // ── SHOW SIMILAR / SHOW ANOTHER ────────────────────────────────────────────
+  {
+    name: "showSimilar",
+    description: `Show products similar to the currently viewed or last-referenced product. Use when user says "show another one" / "show me something similar" / "show other one" / "anything else like this" / "more like this" / "alternatives" / "suggest something similar" / "what else do you have".
+
+You MUST look at the session memory's lastReferencedProduct or the currently viewed product, find its category/productType/brand, and search the inventory for similar items. Return a search query matching the product type.`,
+    parameters: {
+      type: "OBJECT",
+      properties: {
+        query: {
+          type: "STRING",
+          description: "Search query based on the referenced product's category/type (e.g. 'shoes', 'phone', 'watch'). Use the product type, not the specific product name."
+        }
+      },
+      required: ["query"]
     }
   },
 
@@ -409,13 +440,16 @@ function mapFunctionCallToAction(functionCall) {
       return { action: "SORT_PRODUCTS", sortBy: args.sortBy };
 
     case "scrollPage":
-      return { action: "SCROLL", direction: args.direction };
+      return { action: "SCROLL", direction: args.direction, amount: args.amount || 'normal' };
 
     case "goToCheckout":
       return { action: "GO_TO_CHECKOUT" };
 
     case "goBack":
       return { action: "NAVIGATE_BACK" };
+
+    case "showSimilar":
+      return { action: "GLOBAL_SEARCH", query: args.query };
 
     case "sleepAssistant":
       return { action: "SLEEP" };
