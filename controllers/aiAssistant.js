@@ -136,8 +136,10 @@ function normalizeTranscript(text) {
   // Expand compound verbs and colloquial navigation requests
   t = t.replace(/\btake me go\b/g, 'go to');
   t = t.replace(/\bcan you go\b/g, 'go to');
+  t = t.replace(/\b(?:can you|could you)\s+(?:please\s+)?go\s+(?:to\s+)?/g, 'go to ');
   t = t.replace(/\bcould you take me to\b/g, 'go to');
   t = t.replace(/\bi want you to go to\b/g, 'go to');
+  t = t.replace(/\b(?:i want you to|i'd like you to|i would like you to|i need you to)\s+(?:go\s+(?:to\s+)?|take me\s+(?:to\s+)?|open\s+)/g, 'go to ');
   t = t.replace(/\bwould you mind opening\b/g, 'open');
   t = t.replace(/\bdo you mind opening\b/g, 'open');
   t = t.replace(/\bcan we open\b/g, 'open');
@@ -150,21 +152,21 @@ function normalizeTranscript(text) {
   t = t.replace(/\bhead to\b/g, 'go to');
 
   // Normalize place expressions & polite requests
-  t = t.replace(/\b(?:check out (?:the )?products|check out products)\b/g, 'go to shop page');
+  t = t.replace(/\b(?:check out (?:all\s+)?(?:the )?products|check out products)\b/g, 'go to shop page');
   t = t.replace(/\b(?:check out (?:the )?store|check out store)\b/g, 'go to shop page');
   t = t.replace(/\b(?:check out (?:the )?shop|check out shop)\b/g, 'go to shop page');
-  t = t.replace(/\b(?:let's\s+)?(?:go\s+)?check out (?:the\s+)?products\b/g, 'go to shop page');
+  t = t.replace(/\b(?:let's\s+)?(?:go\s+)?check out (?:all\s+)?(?:the\s+)?products\b/g, 'go to shop page');
   t = t.replace(/\b(?:could you|can you|please)\s+open (?:the\s+)?store(?: for me)?\b/g, 'open shop');
+  t = t.replace(/\b(?:i want to browse (?:the )?store|browse (?:the )?store|browse (?:all )?(?:the )?products)\b/g, 'go to shop page');
   t = t.replace(/\bmove to (?:the\s+)?shopping page\b/g, 'go to shop page');
-  t = t.replace(/\b(?:i want to see what's available|see what's available|what's available|whats available)\b/g, 'shop page');
-  t = t.replace(/\b(?:take me to where (?:all )?(?:the )?products are|where (?:all )?(?:the )?products are)\b/g, 'shop page');
+  t = t.replace(/\b(?:i want to see what's available|let's have a look at what's available|see what's available|what's available|whats available)\b/g, 'shop page');
+  t = t.replace(/\b(?:take me to where (?:all\s+)?(?:the\s+)?products are|where (?:all\s+)?(?:the\s+)?products are)\b/g, 'shop page');
   t = t.replace(/\bwhere the products are\b/g, 'shop page');
   t = t.replace(/\bwhere products are\b/g, 'shop page');
   t = t.replace(/\bwhere the deals are\b/g, 'deals page');
   t = t.replace(/\bwhere deals are\b/g, 'deals page');
   t = t.replace(/\b(?:get me out of here|take me out of here|return to where i came from|get me back where i was|return to the last page|go one step back|one step back|move to the previous page)\b/g, 'go back');
-  t = t.replace(/\bi need to see the products\b/g, 'go to shop page');
-  t = t.replace(/\bsee the products\b/g, 'go to shop page');
+  t = t.replace(/\b(?:i need you to show me (?:all )?(?:the )?products|i need to see (?:all )?(?:the )?products|see the products)\b/g, 'go to shop page');
   t = t.replace(/\bthe store\b/g, 'the shop');
   t = t.replace(/\bshopping section\b/g, 'shop page');
 
@@ -591,14 +593,21 @@ Output ONLY a raw JSON object:
   if (pageContext && typeof pageContext === 'object') {
     const parts = [];
     if (pageContext.pageType) parts.push(`Page Type: ${pageContext.pageType}`);
+    if (pageContext.pageTitle) parts.push(`Page Title: "${pageContext.pageTitle}"`);
     if (pageContext.searchQuery) parts.push(`Active Search: "${pageContext.searchQuery}"`);
     if (pageContext.appliedFilters?.active?.length > 0) parts.push(`Active Filters: ${pageContext.appliedFilters.active.join(', ')}`);
     if (pageContext.sortOrder) parts.push(`Sort: ${pageContext.sortOrder}`);
     if (pageContext.productCount > 0) parts.push(`Products on Screen: ${pageContext.productCount}`);
+    if (Array.isArray(pageContext.visibleButtons) && pageContext.visibleButtons.length > 0) {
+      parts.push(`Interactive Elements: ${pageContext.visibleButtons.length} product/page controls mapped by exact productId and position`);
+    }
     if (pageContext.cartItemCount > 0) parts.push(`Cart Items: ${pageContext.cartItemCount}`);
     if (pageContext.viewingProduct) parts.push(`Viewing: ${pageContext.viewingProduct.name} (${pageContext.viewingProduct.brand}, ${pageContext.viewingProduct.price})`);
     if (pageContext.scrollPosition > 0) parts.push(`Scroll: ${pageContext.scrollPosition}% down`);
-    if (parts.length > 0) screenAwareness = `\n\n═══ SCREEN AWARENESS ═══\n${parts.join('\n')}\nUse this context to give precise, relevant answers about what the user is currently seeing.`;
+    if (parts.length > 0) screenAwareness = `\n\n═══ SCREEN AWARENESS ═══\n${parts.join('\n')}\nUse this context to give precise, relevant answers about what the user is currently seeing.
+IMPORTANT INTENT DISTINCTION:
+• NEVER execute navigation or clicks if the user is merely asking what a command means ("What does go shop page mean?") or reflecting/musing ("I was thinking about opening the shop.").
+• If the user says "Click product", "Open product", "Go inside the product", or "Can you show me the product?" without specifying which one, ask which product or ordinal position they mean — NEVER pick a random product or search for "product".`;
   }
 
   const userContext = `
@@ -687,7 +696,7 @@ exports.chat = async (req, res) => {
     const promptContext = {
       userName, userPreferredLang, detectedLang, user, recentOrders,
       cartItems, currentPage, pageContext, currentlyVisibleProducts, catalogProducts,
-      companionPersona, sessionContext
+      companionPersona, sessionContext, rawMessage: cleanMessage
     };
 
     // Format conversation history
@@ -969,6 +978,7 @@ const NAV_KEYWORDS = {
 
 async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], catalogProducts = [], sessionContext = {}, promptContext = {}) {
   const lower = message.toLowerCase();
+  const rawLower = (promptContext.rawMessage || message || '').toLowerCase();
   const {
     currentPage = '/',
     cartItems = [],
@@ -978,6 +988,29 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
 
   const findInCatalog = (id) => (catalogProducts || []).find(p => String(p._id || p.id) === String(id));
   const lastReferencedItem = sessionContext.lastReferencedProduct ? findInCatalog(sessionContext.lastReferencedProduct) : null;
+
+  // 0. META-QUESTIONS & NON-COMMAND MUSINGS GUARD (Must precede navigation/cart matching)
+  const hasActionPivot = /(?:,|\band\b|\bnow\b|\bso\b|\bthen\b)\s*(?:please\s+)?(?:can you|could you|take me|go\b|open\b|click\b|show\b|navigate|add\b)/i.test(rawLower);
+  if (
+    /\bwhat\s+(?:does|do|is)\b.*\b(?:mean|meaning|definition|stand for|refer to)\b/i.test(rawLower) ||
+    /\b(?:meaning|definition)\s+of\b/i.test(rawLower) ||
+    /\b(?:explain|define)\s+(?:the\s+)?(?:phrase|command|term|words)\b/i.test(rawLower)
+  ) {
+    return {
+      text: "Saying that asks me to navigate to the AMBIENCE Shop catalogue (/shop). Tell me whenever you'd like me to open it for you!",
+      actions: [],
+      emotion: "neutral",
+      language: "en"
+    };
+  }
+  if (!hasActionPivot && /^(?:i was (?:thinking|wondering|considering|planning)|i might|maybe i(?:'ll| will)?|perhaps i|should i|do you think i should)\b/i.test(rawLower.trim())) {
+    return {
+      text: "Take your time! Just tell me 'open the shop' or 'click the second product' whenever you're ready.",
+      actions: [],
+      emotion: "happy",
+      language: "en"
+    };
+  }
 
   // 1. CLEAR CART
   if (lower.match(/\b(clear my cart|clear cart|empty my cart|empty cart|delete everything in cart|dump cart)\b/)) {
@@ -1017,8 +1050,10 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
   }
 
   // 3. ADD TO CART WITH SLANG (American, British, Indian, Australian) + Context Resolution
+  // Only short-circuit here when NO specific ordinal / visual attribute is requested (otherwise let Section 7 resolve the exact target!)
+  const hasOrdinalOrNumber = /\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|last|next|previous|1st|2nd|3rd|\d+th|(?:number|no\.?|product|item|#)\s*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten))\b/i.test(lower);
   const isAddCart = lower.match(/\b(add to cart|add that to cart|add this to cart|cop that|cop this|chuck in the basket|chuck in cart|chuck that in|toss in my cart|toss in cart|pack that one|put in cart ya|put in cart na|grab this|snag this|add to basket)\b/);
-  if (isAddCart) {
+  if (isAddCart && !hasOrdinalOrNumber) {
     let target = null;
     if (currentlyVisibleProducts && currentlyVisibleProducts.length > 0) {
       target = currentlyVisibleProducts[0];
@@ -1099,22 +1134,32 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
     };
   }
 
-  // 6. PHONETIC NAVIGATION DISAMBIGUATOR (HIGHEST PRIORITY)
-  for (const override of NAVIGATION_PHONETIC_OVERRIDES) {
-    for (const pattern of override.patterns) {
-      if (lower.includes(pattern)) {
-        const pageName = override.route === '/' ? 'home' : override.route.replace(/\//g, ' ').trim();
-        return {
-          text: `Taking you straight to ${pageName}!`,
-          actions: [{ action: override.route === '/' ? 'NAVIGATE_HOME' : 'NAVIGATE_ROUTE', path: override.route }],
-          emotion: 'happy',
-          language: 'en'
-        };
+  // 6. PHONETIC & CLAUSE-AWARE NAVIGATION DISAMBIGUATOR (HIGHEST PRIORITY)
+  const navClauses = lower
+    .split(/\s*[.;!?]+\s*|\s*,\s*|\b(?:and then|and now|so now|so please|but now|before anything else)\b/i)
+    .map(c => c.trim())
+    .filter(Boolean);
+  for (let ci = navClauses.length - 1; ci >= 0; ci--) {
+    const clause = navClauses[ci];
+    const clauseIsCartAction = /\b(add|put|chuck|toss|grab|cop|buy)\b.*\b(cart|basket)\b/i.test(clause);
+    const clauseIsProductSelector = /\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|last|next|previous(?!\s+page)|\d+(?:st|nd|rd|th)|(?:number|no\.?|#|product|item|card)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten))\b/i.test(clause) && !/\bpage\b/i.test(clause);
+    if (clauseIsCartAction || clauseIsProductSelector) continue;
+    for (const override of NAVIGATION_PHONETIC_OVERRIDES) {
+      for (const pattern of override.patterns) {
+        if (clause.includes(pattern)) {
+          const pageName = override.route === '/' ? 'home' : override.route.replace(/\//g, ' ').trim();
+          return {
+            text: `Taking you straight to ${pageName}!`,
+            actions: [{ action: override.route === '/' ? 'NAVIGATE_HOME' : 'NAVIGATE_ROUTE', path: override.route }],
+            emotion: 'happy',
+            language: 'en'
+          };
+        }
       }
     }
   }
 
-  // 7. Positional Commands (Screen Awareness) — Generalized 0-based ordinals & category filtering
+  // 7. Positional Commands (Screen Awareness) — Generalized 0-based ordinals, word numbers & category filtering
   const ORDINAL_MAP = {
     first: 0, '1st': 0, top: 0,
     second: 1, '2nd': 1,
@@ -1137,9 +1182,25 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
     nineteenth: 18, '19th': 18,
     twentieth: 19, '20th': 19
   };
+  const CARDINAL_WORDS = {
+    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+    eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20
+  };
 
-  const positionalMatch = lower.match(/(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|last|next|previous|top|bottom|number \d+|1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th|11th|12th|13th|14th|15th|16th|17th|18th|19th|20th)/i);
-  if (positionalMatch && currentlyVisibleProducts && currentlyVisibleProducts.length > 0) {
+  const wordNumMatch = lower.match(new RegExp(`\\b(?:number|no\\.?|#|product|item|card)\\s+(?:number\\s+)?(${Object.keys(CARDINAL_WORDS).join('|')})\\b`, 'i'));
+  const positionalMatch = lower.match(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|last|next|previous(?!\s+page)|top|bottom|(?:product|item|number|#)\s*\d+|\d+(?:st|nd|rd|th))\b/i);
+  const isOtherRef = /\bthe other (?:product|item|one)\b|\bother (?:product|one)\b/i.test(lower);
+
+  if (wordNumMatch || positionalMatch || isOtherRef) {
+    if (!currentlyVisibleProducts || currentlyVisibleProducts.length === 0) {
+      return {
+        text: "I don't see any products on screen right now. Would you like me to open the Shop Page first?",
+        actions: [],
+        emotion: "neutral",
+        language: "en"
+      };
+    }
+
     const categoryKeywords = ['shirt', 'shirts', 'tshirt', 'shoes', 'shoe', 'sneakers', 'watch', 'watches', 'laptop', 'laptops', 'phone', 'phones', 'bag', 'bags', 'perfume', 'perfumes', 'fragrance', 'cosmetics', 'pants', 'jacket'];
     let filterKeyword = null;
     for (const ck of categoryKeywords) {
@@ -1151,35 +1212,63 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
 
     let candidatePool = currentlyVisibleProducts;
     if (filterKeyword) {
+      const singularCk = filterKeyword.replace(/s$/, '');
       const filtered = currentlyVisibleProducts.filter(p => {
         const pText = `${p.name || ''} ${p.category || ''} ${p.subcategory || ''} ${(p.tags || []).join(' ')}`.toLowerCase();
-        return pText.includes(filterKeyword);
+        return pText.includes(singularCk);
       });
       if (filtered.length > 0) {
         candidatePool = filtered;
+      } else {
+        return {
+          text: `I don't see any ${filterKeyword} products currently visible on this page. Would you like me to search the catalog?`,
+          actions: [],
+          emotion: "neutral",
+          language: "en"
+        };
       }
     }
 
-    let requestedOrdinal = 0;
-    const word = positionalMatch[1].toLowerCase();
-    if (ORDINAL_MAP[word] !== undefined) {
-      requestedOrdinal = ORDINAL_MAP[word];
-    } else if (word === 'last' || word === 'bottom') {
-      requestedOrdinal = candidatePool.length - 1;
-    } else if (word === 'next') {
+    let requestedOrdinal = null;
+    if (wordNumMatch) {
+      requestedOrdinal = CARDINAL_WORDS[wordNumMatch[1].toLowerCase()] - 1;
+    } else if (positionalMatch) {
+      const word = positionalMatch[1].toLowerCase();
+      if (ORDINAL_MAP[word] !== undefined) {
+        requestedOrdinal = ORDINAL_MAP[word];
+      } else if (word === 'last' || word === 'bottom') {
+        requestedOrdinal = candidatePool.length - 1;
+      } else if (word === 'next') {
+        const refId = sessionContext.lastReferencedProduct;
+        const curIdx = candidatePool.findIndex(p => (p.id || p._id) === refId);
+        requestedOrdinal = curIdx >= 0 && curIdx + 1 < candidatePool.length ? curIdx + 1 : 0;
+      } else if (word === 'previous') {
+        const refId = sessionContext.lastReferencedProduct;
+        const curIdx = candidatePool.findIndex(p => (p.id || p._id) === refId);
+        requestedOrdinal = curIdx > 0 ? curIdx - 1 : candidatePool.length - 1;
+      } else {
+        const rawNum = lower.match(/(?:product|item|number|#)\s*(\d+)/i) || lower.match(/(\d+)(?:st|nd|rd|th)/i);
+        if (rawNum) requestedOrdinal = parseInt(rawNum[1], 10) - 1;
+      }
+    } else if (isOtherRef) {
       const refId = sessionContext.lastReferencedProduct;
-      const curIdx = candidatePool.findIndex(p => (p.id || p._id) === refId);
-      requestedOrdinal = curIdx >= 0 && curIdx + 1 < candidatePool.length ? curIdx + 1 : 0;
-    } else if (word === 'previous') {
-      const refId = sessionContext.lastReferencedProduct;
-      const curIdx = candidatePool.findIndex(p => (p.id || p._id) === refId);
-      requestedOrdinal = curIdx > 0 ? curIdx - 1 : candidatePool.length - 1;
-    } else {
-      const rawNum = lower.match(/(?:product|item|number|#)\s*(\d+)/i);
-      if (rawNum) requestedOrdinal = parseInt(rawNum[1], 10) - 1;
+      if (refId && candidatePool.length >= 2) {
+        const curIdx = candidatePool.findIndex(p => (p.id || p._id) === refId);
+        if (curIdx >= 0) {
+          requestedOrdinal = curIdx === 0 ? 1 : (curIdx + 1 < candidatePool.length ? curIdx + 1 : curIdx - 1);
+        }
+      }
+      if (requestedOrdinal === null) {
+        return {
+          text: "Which product would you like to open instead? Tell me its position (like 'second product') or its name.",
+          actions: [],
+          emotion: "helpful",
+          language: "en"
+        };
+      }
     }
 
-    if (requestedOrdinal >= candidatePool.length) {
+    if (requestedOrdinal >= candidatePool.length || requestedOrdinal < 0) {
       const noun = filterKeyword ? `${filterKeyword} ` : '';
       return {
         text: `There are only ${candidatePool.length} ${noun}products currently visible (you requested #${requestedOrdinal + 1}). Would you like me to search for more in the catalogue?`,
@@ -1207,6 +1296,16 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
         language: "en"
       };
     }
+  }
+
+  // 7b. Bare/Ambiguous Singular Product Reference ("click product", "open product", "show me the product")
+  if (/\b(click|open|view|show|select|pick|choose|enter|go inside|go to|take me to|see)\b.*\b(?:product|item)\b/i.test(lower) && !/\bproducts\b/i.test(lower)) {
+    return {
+      text: "Which product would you like me to open? You can say 'first product', 'second product', or tell me its name.",
+      actions: [],
+      emotion: "helpful",
+      language: "en"
+    };
   }
 
   // 8. Visual color / attribute grounding in visible products AND catalog
@@ -1263,7 +1362,7 @@ async function buildSmartFallback(message, lang, currentlyVisibleProducts = [], 
 
   // 9. Navigation Controls — Distinguish history back from named route back
   const isNamedRouteBack = /\b(?:go\s+)?back\s+to\s+(?:the\s+)?(shop|store|cart|home|deals|categories|checkout|mens|womens|footwear|electronics)\b/i.test(lower);
-  if (!isNamedRouteBack && lower.match(/(back|previous|go back|take me back|revert back|back previous|navigate back|return to the previous|return to (?:the )?previous(?: page)?|return to (?:the )?last page|return to where i came from|one step back|step back|move to the previous page|move back to the last|go previous|get me out of here|take me out of here)/)) {
+  if (!isNamedRouteBack && !/\bprevious\s+(?:product|item|one)\b/i.test(lower) && lower.match(/\b(go back|revert back|previous page|take me back|back page|go to previous|last page|back previous|go back previous|navigate back|return to the previous|return to (?:the )?previous(?: page)?|return to (?:the )?last page|return to where i came from|one step back|step back|move to the previous page|move back to the last|go previous|get me out of here|take me out of here|can you go back)\b/)) {
     return { text: "Going back to your previous page!", actions: [{ action: "NAVIGATE_BACK" }], emotion: "happy", language: "en" };
   }
   if (lower.match(/(scroll|scroll down|scroll up|continue down|show more|keep going|keep scrolling)/)) {

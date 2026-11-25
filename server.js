@@ -265,7 +265,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "X-Session-Id", "x-session-id"],
   exposedHeaders: ["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
   maxAge: 86400,
 }));

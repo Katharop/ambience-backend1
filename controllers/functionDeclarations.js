@@ -49,7 +49,8 @@ MULTILINGUAL TRIGGER EXAMPLES:
   "go home" / "ஹோம் பேஜ்" / "होम पेज" → "/"
   "men's page" / "ஆண்கள் பேஜ்" → "/shop/mens"
 
-CRITICAL: If the user asks to go somewhere, visit a section, open a store/page/catalog (including "where the products are", "take me to shopping", "open shop", "check out the products", "see what's available"), or return to a named section ("go back to shop page"), it is ALWAYS navigation (navigateTo), NEVER product search or goBack.`,
+CRITICAL: If the user asks to go somewhere, visit a section, open a store/page/catalog (including "where the products are", "take me to shopping", "open shop", "check out the products", "see what's available"), or return to a named section ("go back to shop page"), it is ALWAYS navigation (navigateTo), NEVER product search or goBack.
+NEVER call navigateTo when the user is merely asking about the meaning of a phrase (e.g., "What does go shop page mean?") or reflecting/thinking out loud (e.g., "I was thinking about opening the shop.") — answer conversationally without navigating.`,
     parameters: {
       type: "OBJECT",
       properties: {
@@ -82,8 +83,9 @@ PRODUCT TYPE MAPPING (user intent → query):
   cosmetics/மேக்கப்/मेकअप → "cosmetics"
   headphones/ஹெட்ஃபோன்/हेडफोन/airpods → "headphones"
 
-DO NOT use this for specific products (use viewProduct instead).
-CRITICAL: DO NOT use this when user says "go to shop", "shop page", "where the products are", "see the products", "open the store", "shopping section", "take me to shopping", "deals page", "cart" — that is ALWAYS navigation (navigateTo), never searchProducts.`,Target:
+DO NOT use this for specific products (use viewProduct or viewProductByIndex instead).
+DO NOT use this for ambiguous singular requests like "click product", "open product", "go inside the product", or "can you show me the product?" — ask the user which specific product or position they mean instead.
+CRITICAL: DO NOT use this when user says "go to shop", "shop page", "where the products are", "see the products", "open the store", "shopping section", "take me to shopping", "deals page", "cart" — that is ALWAYS navigation (navigateTo), never searchProducts.`,
     parameters: {
       type: "OBJECT",
       properties: {
@@ -119,23 +121,23 @@ The productId MUST be the exact MongoDB _id from the injected product inventory.
   // ── VIEW PRODUCT BY SCREEN POSITION ────────────────────────────────────────
   {
     name: "viewProductByIndex",
-    description: `Open a product by its visual position on the user's screen. Uses 0-based indexing from the currentlyVisibleProducts list.
+    description: `Open a product by its visual position on the user's screen. Uses 0-based indexing from the currentlyVisibleProducts list (first visible item = 0, second = 1, third = 2, etc.).
 
 POSITIONAL MAPPING:
-  "first one" / "முதலாவது" / "पहला" / "1st" / "top one" → index: 0
-  "second" / "இரண்டாவது" / "दूसरा" / "2nd" → index: 1
+  "first one" / "Click first product" / "முதலாவது" / "पहला" / "1st" / "top one" → index: 0
+  "second" / "Click second product" / "Select the second product" / "Product number two" / "Open product two" / "இரண்டாவது" / "दूसरा" / "2nd" → index: 1
   "third" / "மூன்றாவது" / "तीसरा" / "3rd" → index: 2
   "fourth" / "நான்காவது" / "चौथा" / "4th" → index: 3
   "fifth" / "5th" → index: 4
   "tenth" / "10th" → index: 9
   Supports all ordinals 1st through 20th.
-  "last one" / "கடைசி" / "आखिरी" → last index
-  "next one" → current index + 1
+  "last one" / "கடைசி" / "आखिरी" → last index (currentlyVisibleProducts.length - 1)
+  "next one" / "the other product" → next alternative index relative to last referenced product
   "previous one" → current index - 1
 
 CATEGORY-FILTERED ORDINALS:
-  "open the second shirt" → filters visible products by 'shirt', selects index 1 of that subset.
-  "click the third shoes" → filters visible products by 'shoes', selects index 2 of that subset.
+  "open the second shirt" → filters visible products by 'shirt', selects 0-based index of that 2nd shirt inside currentlyVisibleProducts.
+  "click the third shoes" → filters visible products by 'shoes', selects 0-based index of that 3rd shoe inside currentlyVisibleProducts.
   If the requested ordinal exceeds the count of visible items matching that category, explain the count to the user rather than opening an unrelated product.
 
 Also supports descriptive references:
@@ -143,7 +145,7 @@ Also supports descriptive references:
   "the Nike one" → match by brand
   "the cheapest" → match by price
 
-Use the exact product _id from the currentlyVisibleProducts array.`,
+Pass the exact 0-based integer index inside currentlyVisibleProducts (or call viewProduct with exact _id).`,
     parameters: {
       type: "OBJECT",
       properties: {
