@@ -34,10 +34,14 @@ VALID ROUTES (use exact strings):
   "/settings" → Account settings & preferences
 
 NATURAL ENGLISH NAVIGATION EXAMPLES (all map to "/shop"):
-  "Go shop page" / "Go shopping page" / "Can you go shop page?" / "Can you go to shop page?"
-  "Take me go shop page" / "Take me to shopping" / "I want go shop" / "I wanna go shopping page"
-  "Open shop" / "Get me to the shop" / "Let's go to the shopping section" / "Can we open the store?"
-  "I need to see the products" / "Take me where the products are" / "Move me to shop page" / "Browse the store"
+  "Go shop page" / "Go shopping page" / "Can you go shop page?" / "Could you take me to shop page?"
+  "Take me go shop page" / "I want you to go to the shopping page" / "Would you mind opening the shop?"
+  "Open shop page" / "Show me the shop" / "Let's browse the products"
+  "Take me to where all the products are" / "Navigate to shop"
+  "Can we check out the products?" (CRITICAL: maps to "/shop", NEVER checkout!)
+  "Get me over to the shop" / "I want to see what's available"
+  "Could you open the store for me?" / "Move to the shopping page" / "Head to the shop"
+  "Go back to the shop page" / "Return to shop" (CRITICAL: named route returns map to navigateTo("/shop"), NOT goBack!)
 
 MULTILINGUAL TRIGGER EXAMPLES:
   "shop page" / "ஷாப் பேஜ்" / "சாப்ட் பேஜ்" / "शॉप पेज" / "கடைக்கு போ" → "/shop"
@@ -45,7 +49,7 @@ MULTILINGUAL TRIGGER EXAMPLES:
   "go home" / "ஹோம் பேஜ்" / "होम पेज" → "/"
   "men's page" / "ஆண்கள் பேஜ்" → "/shop/mens"
 
-CRITICAL: If the user asks to go somewhere, visit a section, or open a store/page/catalog (including "where the products are", "take me to shopping", "open shop"), it is ALWAYS navigation (navigateTo), NEVER a product search.`,
+CRITICAL: If the user asks to go somewhere, visit a section, open a store/page/catalog (including "where the products are", "take me to shopping", "open shop", "check out the products", "see what's available"), or return to a named section ("go back to shop page"), it is ALWAYS navigation (navigateTo), NEVER product search or goBack.`,
     parameters: {
       type: "OBJECT",
       properties: {
@@ -122,7 +126,17 @@ POSITIONAL MAPPING:
   "second" / "இரண்டாவது" / "दूसरा" / "2nd" → index: 1
   "third" / "மூன்றாவது" / "तीसरा" / "3rd" → index: 2
   "fourth" / "நான்காவது" / "चौथा" / "4th" → index: 3
+  "fifth" / "5th" → index: 4
+  "tenth" / "10th" → index: 9
+  Supports all ordinals 1st through 20th.
   "last one" / "கடைசி" / "आखिरी" → last index
+  "next one" → current index + 1
+  "previous one" → current index - 1
+
+CATEGORY-FILTERED ORDINALS:
+  "open the second shirt" → filters visible products by 'shirt', selects index 1 of that subset.
+  "click the third shoes" → filters visible products by 'shoes', selects index 2 of that subset.
+  If the requested ordinal exceeds the count of visible items matching that category, explain the count to the user rather than opening an unrelated product.
 
 Also supports descriptive references:
   "the red one" → match by color
@@ -351,7 +365,22 @@ AMOUNT MAPPING:
   // ── GO BACK ────────────────────────────────────────────────────────────────
   {
     name: "goBack",
-    description: `Go to the previous page (browser back). Use when user says "go back" / "take me back" / "return to the previous page" / "move back to the last page" / "i wanna go previous page" / "get me out of here" / "take me out of here" / "previous" / "back previous page" / "go back previous" / "பின்னால போ" / "back-ku po" / "पीछे जाओ" / "back போ" / "navigate back".`,
+    description: `Go to the previous page in history (browser back). Use when user says:
+  "Go back to the previous page."
+  "Return to the last page."
+  "Take me back."
+  "Step back."
+  "Go back."
+  "Can you go back?"
+  "Move to the previous page."
+  "Revert back." (Indian English)
+  "Return to where I came from."
+  "One step back."
+  "get me out of here" / "take me out of here" / "previous" / "back previous page" / "பின்னால போ" / "back-ku po" / "पीछे जाओ" / "back போ" / "navigate back".
+
+CRITICAL DISTINCTION:
+  Use goBack ONLY for history-back navigation ("previous page", "where I came from", "return to last page").
+  When user says "Go back to the shop page", "Go back to cart", or "Go back home", this is explicit page navigation (navigateTo to '/shop', '/cart', '/'), NEVER goBack!`,
     parameters: {
       type: "OBJECT",
       properties: {},
