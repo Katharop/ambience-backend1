@@ -208,24 +208,14 @@ Use productId = exact MongoDB _id or "current".`,
   {
     name: "clearCart",
     description: `Empty or clear all products from the user's shopping cart.
-Use when user says "clear my cart", "empty cart", "delete everything in cart", "remove all items".`,
-    parameters: {
-      type: "OBJECT",
-      properties: {},
-      required: []
-    }
+Use when user says "clear my cart", "empty cart", "delete everything in cart", "remove all items".`
   },
 
   // ── VIEW CART ───────────────────────────────────────────────────────────────
   {
     name: "viewCart",
     description: `Open the user's shopping cart page (/cart) and review its contents.
-Use when user says "show my cart", "open cart", "what's in my cart", "view basket".`,
-    parameters: {
-      type: "OBJECT",
-      properties: {},
-      required: []
-    }
+Use when user says "show my cart", "open cart", "what's in my cart", "view basket".`
   },
 
   // ── UPDATE QUANTITY ─────────────────────────────────────────────────────────
@@ -356,12 +346,7 @@ AMOUNT MAPPING:
   // ── GO TO CHECKOUT ─────────────────────────────────────────────────────────
   {
     name: "goToCheckout",
-    description: `Navigate to the checkout/payment page. Use when user says "buy this" / "let's checkout" / "செக்அவுட்" / "खरीदो" / "purchase" / "pay". NEVER process actual payments — just navigate to checkout.`,
-    parameters: {
-      type: "OBJECT",
-      properties: {},
-      required: []
-    }
+    description: `Navigate to the checkout/payment page. Use when user says "buy this" / "let's checkout" / "செக்அவுட்" / "खरीदो" / "purchase" / "pay". NEVER process actual payments — just navigate to checkout.`
   },
 
   // ── GO BACK ────────────────────────────────────────────────────────────────
@@ -382,12 +367,7 @@ AMOUNT MAPPING:
 
 CRITICAL DISTINCTION:
   Use goBack ONLY for history-back navigation ("previous page", "where I came from", "return to last page").
-  When user says "Go back to the shop page", "Go back to cart", or "Go back home", this is explicit page navigation (navigateTo to '/shop', '/cart', '/'), NEVER goBack!`,
-    parameters: {
-      type: "OBJECT",
-      properties: {},
-      required: []
-    }
+  When user says "Go back to the shop page", "Go back to cart", or "Go back home", this is explicit page navigation (navigateTo to '/shop', '/cart', '/'), NEVER goBack!`
   },
 
   // ── SHOW SIMILAR / SHOW ANOTHER ────────────────────────────────────────────
@@ -411,12 +391,7 @@ You MUST look at the session memory's lastReferencedProduct or the currently vie
   // ── SLEEP / DISMISS ────────────────────────────────────────────────────────
   {
     name: "sleepAssistant",
-    description: `Close/minimize the AI assistant and enter passive wake-word mode. Use when user says "close" / "stop" / "bye" / "போயிடு" / "நிறுத்து" / "बंद करो" / "shut up" / "go to sleep" / "goodbye" / "dismiss" / "stop listening".`,
-    parameters: {
-      type: "OBJECT",
-      properties: {},
-      required: []
-    }
+    description: `Close/minimize the AI assistant and enter passive wake-word mode. Use when user says "close" / "stop" / "bye" / "போயிடு" / "நிறுத்து" / "बंद करो" / "shut up" / "go to sleep" / "goodbye" / "dismiss" / "stop listening".`
   }
 ];
 

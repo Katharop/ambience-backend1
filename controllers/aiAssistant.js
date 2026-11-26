@@ -226,15 +226,120 @@ function normalizeTranscript(text) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 function isValidKey(key) {
-  if (!key) return false;
-  const lower = key.toLowerCase();
+  if (typeof key !== 'string') return false;
+  const trimmed = key.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
   return !(
     lower.startsWith('your_') ||
     lower.includes('placeholder') ||
     lower.includes('_here') ||
     lower === 'your-api-key' ||
-    key.length < 20
+    trimmed.length < 20
   );
+}
+
+const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash-lite';
+const DEFAULT_GROQ_MODEL = 'openai/gpt-oss-120b';
+
+function getConfiguredGeminiModel() {
+  return (process.env.GEMINI_MODEL || '').trim() || DEFAULT_GEMINI_MODEL;
+}
+
+function getConfiguredGroqModel() {
+  return (process.env.GROQ_MODEL || '').trim() || DEFAULT_GROQ_MODEL;
+}
+
+function sanitizeProviderErrorMessage(rawMessage) {
+  if (!rawMessage || typeof rawMessage !== 'string') return 'Unknown provider error';
+  return rawMessage
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
+    .replace(/\bAIza[0-9A-Za-z_-]{10,}\b/g, '[REDACTED]')
+    .replace(/\bAQ\.[0-9A-Za-z._-]{10,}\b/g, '[REDACTED]')
+    .replace(/\bgsk_[0-9A-Za-z_-]{10,}\b/g, '[REDACTED]')
+    .replace(/\bsk-[0-9A-Za-z_-]{10,}\b/g, '[REDACTED]')
+    .replace(/([?&](?:key|api_key|token)=)[^&\s]+/gi, '$1[REDACTED]')
+    .slice(0, 300);
+}
+
+function logProviderDiagnostic({ provider, model, keyValid, status = null, error = null }) {
+  const rawMsg = error?.response?.data?.error?.message || error?.message || '';
+  const errMeta = `${rawMsg} ${error?.name || ''} ${error?.code || ''}`;
+  const isTimeoutSignal = /timeout|timed out|abort|ECONNABORTED|ETIMEDOUT/i.test(errMeta);
+  const resolvedStatus = status ?? error?.status ?? error?.response?.status ?? (isTimeoutSignal ? 408 : null);
+  const isTimeout = resolvedStatus === 408 || isTimeoutSignal;
+  const isRateLimit = resolvedStatus === 429 || /rate limit|quota|resource_exhausted|too many requests/i.test(rawMsg);
+  const safeMsg = rawMsg
+    ? sanitizeProviderErrorMessage(rawMsg)
+    : (keyValid ? 'Provider returned empty or unparseable output' : 'Provider key missing or failed validation');
+  console.warn('[AI Provider Diagnostic]', JSON.stringify({
+    provider,
+    model,
+    keyValid: Boolean(keyValid),
+    status: resolvedStatus,
+    isTimeout,
+    isRateLimit,
+    error: safeMsg
+  }));
+}
+
+function normalizeGeminiHistory(history = [], currentMessage = '') {
+  const safeCurrent = typeof currentMessage === 'string' ? currentMessage.trim() : '';
+  const canonicalText = (s) => normalizeTranscript(s).replace(/[?.!,;:]+$/g, '').trim();
+  const coalesced = [];
+
+  for (const msg of Array.isArray(history) ? history : []) {
+    if (!msg || typeof msg !== 'object') continue;
+    const role = msg.role === 'user' ? 'user' : (msg.role === 'assistant' || msg.role === 'model' ? 'model' : null);
+    if (!role) continue;
+
+    let text = '';
+    if (typeof msg.content === 'string') {
+      text = msg.content.trim();
+    } else if (Array.isArray(msg.parts)) {
+      text = msg.parts
+        .map(p => (typeof p?.text === 'string' ? p.text.trim() : ''))
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+    } else if (msg.content != null) {
+      text = JSON.stringify(msg.content);
+    }
+
+    if (!text) continue;
+
+    const last = coalesced[coalesced.length - 1];
+    if (last && last.role === role) {
+      if (canonicalText(last.parts[0].text) !== canonicalText(text)) {
+        last.parts[0].text = `${last.parts[0].text}\n${text}`;
+      }
+    } else {
+      coalesced.push({ role, parts: [{ text }] });
+    }
+  }
+
+  // Gemini startChat requires history to begin with a 'user' role.
+  // If assistant greeted first before any user turn, preserve following user context cleanly.
+  while (coalesced.length > 0 && coalesced[0].role !== 'user') {
+    coalesced.shift();
+  }
+
+  // chatSession.sendMessage(outgoingMessage) appends a 'user' turn;
+  // merge any trailing 'user' history turn into outgoingMessage unless it duplicates the incoming turn.
+  let outgoingMessage = safeCurrent;
+  if (coalesced.length > 0 && coalesced[coalesced.length - 1].role === 'user') {
+    const trailingUserText = coalesced.pop().parts[0].text.trim();
+    if (!outgoingMessage) {
+      outgoingMessage = trailingUserText;
+    } else if (
+      trailingUserText.toLowerCase() !== outgoingMessage.toLowerCase() &&
+      canonicalText(trailingUserText) !== canonicalText(outgoingMessage)
+    ) {
+      outgoingMessage = `${trailingUserText}\n${outgoingMessage}`;
+    }
+  }
+
+  return { geminiHistory: coalesced, outgoingMessage };
 }
 
 function parseAIResponse(raw) {
@@ -244,6 +349,13 @@ function parseAIResponse(raw) {
   if (fenceMatch) cleaned = fenceMatch[1].trim();
   const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
+    if (cleaned.startsWith('{')) {
+      const partialText = cleaned.match(/"text"\s*:\s*"([^"]+)"/);
+      if (partialText) {
+        return { text: partialText[1], actions: [], emotion: 'neutral', language: 'en' };
+      }
+      return null;
+    }
     if (cleaned.length > 2) {
       return { text: cleaned.slice(0, 500), actions: [], emotion: 'neutral', language: 'en' };
     }
@@ -707,19 +819,19 @@ exports.chat = async (req, res) => {
         content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
       }));
 
-    // ── Tier 2: Gemini 2.0 Flash with NATIVE FUNCTION CALLING (PRIMARY) ─────
+    // ── Tier 2: Gemini (Configurable Model) with NATIVE FUNCTION CALLING ──────
     const geminiResult = await tryGeminiFunctionCalling(promptContext, normalizedMessage, formattedHistory);
     if (geminiResult) {
-      console.log('[Ambience AI] 🧠 Gemini 2.0 Flash (Function Calling) — Success');
+      console.log(`[Ambience AI] Gemini (${getConfiguredGeminiModel()}) Function Calling — Success`);
       updateSessionFromActions(sessionId, sessionContext, geminiResult.actions, currentlyVisibleProducts);
       return res.json({ success: true, response: normalizeResponse(geminiResult) });
     }
 
-    // ── Tier 3: Groq Cloud (Llama 3.3 70B) — text-only fallback ─────────────
+    // ── Tier 3: Groq Cloud (Configurable Model) — JSON fallback ──────────────
     const systemPromptText = buildSystemPrompt({ ...promptContext, isForFunctionCalling: false });
     const groqResult = await tryGroq(systemPromptText, normalizedMessage, formattedHistory);
     if (groqResult) {
-      console.log('[Ambience AI] 🚀 Groq (Llama 3.3 70B) — Fallback Success');
+      console.log(`[Ambience AI] Groq (${getConfiguredGroqModel()}) — Fallback Success`);
       updateSessionFromActions(sessionId, sessionContext, groqResult.actions, currentlyVisibleProducts);
       return res.json({ success: true, response: normalizeResponse(groqResult) });
     }
@@ -765,21 +877,25 @@ function updateSessionFromActions(sessionId, sessionContext, actions = [], visib
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// TIER 2: GEMINI 2.0 FLASH WITH NATIVE FUNCTION CALLING
+// TIER 2: GEMINI NATIVE FUNCTION CALLING (Configurable Model)
 // ══════════════════════════════════════════════════════════════════════════════
 
 async function tryGeminiFunctionCalling(promptContext, message, history) {
-  const key = process.env.GEMINI_API_KEY;
-  if (!isValidKey(key)) {
+  const modelId = getConfiguredGeminiModel();
+  const key = typeof process.env.GEMINI_API_KEY === 'string' ? process.env.GEMINI_API_KEY.trim() : '';
+  const keyValid = isValidKey(key);
+  if (!keyValid) {
+    logProviderDiagnostic({ provider: 'gemini', model: modelId, keyValid: false });
     return null;
   }
 
+  let timeoutId = null;
   try {
     const genAI = new GoogleGenerativeAI(key);
     const systemPrompt = buildSystemPrompt({ ...promptContext, isForFunctionCalling: true });
 
     const model = genAI.getGenerativeModel({
-      model: 'gemini-2.0-flash',
+      model: modelId,
       systemInstruction: systemPrompt,
       tools: [{ functionDeclarations }],
       generationConfig: {
@@ -789,20 +905,29 @@ async function tryGeminiFunctionCalling(promptContext, message, history) {
       }
     });
 
-    const geminiHistory = history.map(msg => ({
-      role: msg.role === 'user' ? 'user' : 'model',
-      parts: [{ text: msg.content }]
-    }));
-
+    const { geminiHistory, outgoingMessage } = normalizeGeminiHistory(history, message);
     const chatSession = model.startChat({ history: geminiHistory });
+
+    const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        if (abortController) abortController.abort();
+        reject(new Error('Gemini timeout'));
+      }, 8000);
+    });
+    const requestOptions = abortController ? { signal: abortController.signal } : { timeout: 8000 };
+
     const result = await Promise.race([
-      chatSession.sendMessage(message),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Gemini timeout')), 8000))
+      chatSession.sendMessage(outgoingMessage || message, requestOptions),
+      timeoutPromise
     ]);
 
-    const response = result.response;
-    const candidates = response.candidates;
-    if (!candidates || candidates.length === 0) return null;
+    const response = result?.response;
+    const candidates = response?.candidates;
+    if (!candidates || candidates.length === 0) {
+      logProviderDiagnostic({ provider: 'gemini', model: modelId, keyValid: true });
+      return null;
+    }
 
     const parts = candidates[0].content?.parts || [];
     let spokenText = '';
@@ -828,7 +953,10 @@ async function tryGeminiFunctionCalling(promptContext, message, history) {
       else spokenText = "Right on it!";
     }
 
-    if (!spokenText.trim() && actions.length === 0) return null;
+    if (!spokenText.trim() && actions.length === 0) {
+      logProviderDiagnostic({ provider: 'gemini', model: modelId, keyValid: true });
+      return null;
+    }
 
     return {
       text: spokenText.trim(),
@@ -838,8 +966,10 @@ async function tryGeminiFunctionCalling(promptContext, message, history) {
     };
 
   } catch (err) {
-    console.warn('[Gemini FC Notice]', err.message);
+    logProviderDiagnostic({ provider: 'gemini', model: modelId, keyValid: true, error: err });
     return null;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }
 
@@ -855,32 +985,48 @@ function detectEmotion(text) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// TIER 3: GROQ CLOUD (Llama 3.3 70B) — TEXT-ONLY FALLBACK
+// TIER 3: GROQ CLOUD (OpenAI GPT-OSS 120B / Configurable) — JSON FALLBACK
 // ══════════════════════════════════════════════════════════════════════════════
 
 async function tryGroq(systemPrompt, message, history) {
-  const key = process.env.GROQ_API_KEY;
-  if (!isValidKey(key)) {
+  const modelId = getConfiguredGroqModel();
+  const key = typeof process.env.GROQ_API_KEY === 'string' ? process.env.GROQ_API_KEY.trim() : '';
+  const keyValid = isValidKey(key);
+  if (!keyValid) {
+    logProviderDiagnostic({ provider: 'groq', model: modelId, keyValid: false });
     return null;
   }
 
   try {
+    const safeHistory = (Array.isArray(history) ? history : [])
+      .filter(m => m && (m.role === 'user' || m.role === 'assistant' || m.role === 'model') && m.content)
+      .map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+      }));
+
     const messages = [
       { role: 'system', content: systemPrompt },
-      ...history,
+      ...safeHistory,
       { role: 'user', content: message }
     ];
 
+    const payload = {
+      model: modelId,
+      messages,
+      temperature: 0.7,
+      top_p: 0.9,
+      max_completion_tokens: 1200,
+      response_format: { type: 'json_object' }
+    };
+
+    if (/gpt-oss|deepseek|qwen/i.test(modelId)) {
+      payload.reasoning_effort = 'low';
+    }
+
     const response = await axios.post(
       'https://api.groq.com/openai/v1/chat/completions',
-      {
-        model: 'llama-3.3-70b-versatile',
-        messages,
-        temperature: 0.7,
-        top_p: 0.9,
-        max_tokens: 800,
-        response_format: { type: 'json_object' }
-      },
+      payload,
       {
         headers: {
           'Authorization': `Bearer ${key}`,
@@ -891,13 +1037,19 @@ async function tryGroq(systemPrompt, message, history) {
     );
 
     const content = response.data?.choices?.[0]?.message?.content;
-    if (!content) return null;
+    if (!content) {
+      logProviderDiagnostic({ provider: 'groq', model: modelId, keyValid: true, status: response.status });
+      return null;
+    }
 
     const parsed = parseAIResponse(content);
-    if (!parsed) return null;
+    if (!parsed) {
+      logProviderDiagnostic({ provider: 'groq', model: modelId, keyValid: true, status: response.status });
+      return null;
+    }
     return parsed;
   } catch (err) {
-    console.warn('[Groq Notice]', err.message);
+    logProviderDiagnostic({ provider: 'groq', model: modelId, keyValid: true, error: err });
     return null;
   }
 }
